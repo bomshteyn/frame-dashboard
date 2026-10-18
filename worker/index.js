@@ -727,24 +727,23 @@ async function hiddenPhotoIds(db, album) {
   return new Set(((result && result.results) || []).map((row) => row.id));
 }
 var shareLinkCache = new Map();
-async function albumShareLink(shareUrl) {
+async function albumShareLink(shareUrl, fetcher = fetch) {
   if (!shareUrl) return null;
   if (shareLinkCache.has(shareUrl)) return shareLinkCache.get(shareUrl);
   let link = null;
   try {
     let url = new URL(shareUrl);
     if (url.hostname !== "photos.google.com") {
-      const response = await fetch(url.toString(), { redirect: "manual" });
-      const location = response.headers.get("location");
-      if (location) url = new URL(location, url);
+      const response = await fetcher(url.toString(), { redirect: "follow", headers: ALBUM_PAGE_HEADERS });
+      url = new URL(response.url || url);
     }
-    const match = /\/share\/([^/]+)/.exec(url.pathname);
+    const match = /^\/share\/([^/]+)/.exec(url.pathname);
     if (url.hostname === "photos.google.com" && match && url.searchParams.get("key")) {
       link = { aid: match[1], key: url.searchParams.get("key") };
+      shareLinkCache.set(shareUrl, link);
     }
   } catch (_) {
   }
-  shareLinkCache.set(shareUrl, link);
   return link;
 }
 function googlePhotoLink(share, shareUrl, mk) {
@@ -756,7 +755,9 @@ function albumShareUrl(env, album) {
   return album === "main" ? env.PHOTOS_ALBUM_URL : env.SHABBAT_ALBUM_URL || env.PHOTOS_ALBUM_URL;
 }
 async function hiddenPhotos(request, env) {
-  const result = await env.DB.prepare("SELECT album, id, src, date, mk, hidden FROM photo_hidden ORDER BY hidden DESC LIMIT 500").all();
+  const result = await env.DB.prepare(
+    "SELECT h.album, h.id, h.src, h.date, COALESCE(h.mk, (SELECT MAX(p.mk) FROM album_photo p WHERE p.album = h.album AND p.id = h.id)) AS mk, h.hidden FROM photo_hidden h ORDER BY h.hidden DESC LIMIT 500"
+  ).all();
   const shares = {};
   const list = [];
   for (const row of result.results || []) {
@@ -1001,11 +1002,14 @@ var index_default = {
   }
 };
 export {
+  albumShareLink,
   buildKodeshWindows,
   constantTimeEqual,
   index_default as default,
   expandCalendar,
+  googlePhotoLink,
   hidePhoto,
+  hiddenPhotos,
   indexedAlbumPhotos,
   isKodeshWindowActive,
   mergeEvents,
