@@ -526,6 +526,7 @@ function sharedAlbumPhotos(records, album) {
     const width = media[1], height = media[2];
     const orientation = Number.isFinite(width) && Number.isFinite(height) && height > width ? "p" : "l";
     const photo = { src: `${base}=w1280-h800`, o: orientation, from: "family", tag: album };
+    if (typeof item[0] === "string" && /^AF1Qip[A-Za-z0-9_-]+$/.test(item[0])) photo.mk = item[0];
     if (typeof item[2] === "number" && Number.isFinite(item[2])) photo.date = torontoDateKey(item[2]);
     photos2.push(photo);
   });
@@ -568,8 +569,8 @@ async function fetchNextAlbumPage(scan, fetcher) {
 }
 function albumPhotoInsertStatements(db, album, gen, photos2) {
   return photos2.map((photo) => db.prepare(
-    "INSERT OR IGNORE INTO album_photo (album, gen, id, src, date, o) VALUES (?, ?, ?, ?, ?, ?)"
-  ).bind(album, gen, photo.src.slice(0, -"=w1280-h800".length), photo.src, photo.date || null, photo.o === "p" ? "p" : "l"));
+    "INSERT OR IGNORE INTO album_photo (album, gen, id, src, date, o, mk) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  ).bind(album, gen, photo.src.slice(0, -"=w1280-h800".length), photo.src, photo.date || null, photo.o === "p" ? "p" : "l", photo.mk || null));
 }
 async function abandonAlbumScan(db, album, gen) {
   await db.batch([
@@ -648,15 +649,18 @@ function albumPhotoRow(row, album) {
   if (row.date) photo.date = row.date;
   return photo;
 }
+var NOT_HIDDEN = "NOT EXISTS (SELECT 1 FROM photo_hidden h WHERE h.album = p.album AND h.id = p.id)";
 async function randomAlbumRows(db, album, gen) {
-  const result = await db.prepare("SELECT src, date, o FROM album_photo WHERE album = ? AND gen = ? ORDER BY RANDOM() LIMIT ?").bind(album, gen, PHOTO_BATCH_SIZE).all();
+  const sql = "SELECT p.src, p.date, p.o FROM album_photo p WHERE p.album = ? AND p.gen = ? ";
+  const result = await db.prepare(sql + "AND " + NOT_HIDDEN + " ORDER BY RANDOM() LIMIT ?").bind(album, gen, PHOTO_BATCH_SIZE).all()
+    .catch(() => db.prepare(sql + "ORDER BY RANDOM() LIMIT ?").bind(album, gen, PHOTO_BATCH_SIZE).all());
   return result.results || [];
 }
 // Every batch: up to PHOTO_BATCH_NEW_MAX new photos (recently added to the album or recently taken),
 // filled up with random older photos, preferring ones not shown in the last day.
 async function mixedAlbumRows(db, album, gen, now) {
   const isNew = "(COALESCE(s.added, 0) >= ? OR p.date >= ?)";
-  const base = "SELECT p.id, p.src, p.date, p.o FROM album_photo p LEFT JOIN photo_seen s ON s.album = p.album AND s.id = p.id WHERE p.album = ? AND p.gen = ? AND ";
+  const base = "SELECT p.id, p.src, p.date, p.o FROM album_photo p LEFT JOIN photo_seen s ON s.album = p.album AND s.id = p.id WHERE p.album = ? AND p.gen = ? AND " + NOT_HIDDEN + " AND ";
   const addedSince = now - PHOTO_NEW_ADDED_MS;
   const takenSince = torontoDateKey(now - PHOTO_NEW_TAKEN_MS);
   const [fresh, older] = await db.batch([
@@ -696,12 +700,13 @@ async function photos(request, env) {
     if (indexed) return json(indexed);
   } catch (_) {
   }
-  const shareUrl = album === "main" ? env.PHOTOS_ALBUM_URL : env.SHABBAT_ALBUM_URL || env.PHOTOS_ALBUM_URL;
+  const shareUrl = albumShareUrl(env, album);
   if (shareUrl) {
     try {
       const html = await cachedText(new URL(shareUrl).toString(), 3600);
       const records = sharedMediaRecords(html);
-      const photos2 = sharedAlbumPhotos(records, album);
+      const hidden = await hiddenPhotoIds(env.DB, album);
+      const photos2 = sharedAlbumPhotos(records, album).filter((photo) => !hidden.has(photoId(photo.src)));
       if (photos2.length) {
         return json({ photos: photos2, total: photos2.length });
       }
@@ -710,6 +715,79 @@ async function photos(request, env) {
     }
   }
   return localPhotoManifest(request, env);
+}
+var PHOTO_SRC_RE = /^(https:\/\/lh3\.googleusercontent\.com\/pw\/[A-Za-z0-9_-]+)(=[A-Za-z0-9-]*)?$/;
+function photoId(src) {
+  const match = PHOTO_SRC_RE.exec(String(src || ""));
+  return match ? match[1] : null;
+}
+async function hiddenPhotoIds(db, album) {
+  if (!db) return new Set();
+  const result = await db.prepare("SELECT id FROM photo_hidden WHERE album = ?").bind(album).all().catch(() => null);
+  return new Set(((result && result.results) || []).map((row) => row.id));
+}
+var shareLinkCache = new Map();
+async function albumShareLink(shareUrl) {
+  if (!shareUrl) return null;
+  if (shareLinkCache.has(shareUrl)) return shareLinkCache.get(shareUrl);
+  let link = null;
+  try {
+    let url = new URL(shareUrl);
+    if (url.hostname !== "photos.google.com") {
+      const response = await fetch(url.toString(), { redirect: "manual" });
+      const location = response.headers.get("location");
+      if (location) url = new URL(location, url);
+    }
+    const match = /\/share\/([^/]+)/.exec(url.pathname);
+    if (url.hostname === "photos.google.com" && match && url.searchParams.get("key")) {
+      link = { aid: match[1], key: url.searchParams.get("key") };
+    }
+  } catch (_) {
+  }
+  shareLinkCache.set(shareUrl, link);
+  return link;
+}
+function googlePhotoLink(share, shareUrl, mk) {
+  if (share && mk) return `https://photos.google.com/share/${share.aid}/photo/${mk}?key=${encodeURIComponent(share.key)}`;
+  if (share) return `https://photos.google.com/share/${share.aid}?key=${encodeURIComponent(share.key)}`;
+  return shareUrl || null;
+}
+function albumShareUrl(env, album) {
+  return album === "main" ? env.PHOTOS_ALBUM_URL : env.SHABBAT_ALBUM_URL || env.PHOTOS_ALBUM_URL;
+}
+async function hiddenPhotos(request, env) {
+  const result = await env.DB.prepare("SELECT album, id, src, date, mk, hidden FROM photo_hidden ORDER BY hidden DESC LIMIT 500").all();
+  const shares = {};
+  const list = [];
+  for (const row of result.results || []) {
+    const shareUrl = albumShareUrl(env, row.album);
+    if (!(row.album in shares)) shares[row.album] = await albumShareLink(shareUrl);
+    list.push({ album: row.album, id: row.id, src: row.src, date: row.date, hidden: row.hidden, link: googlePhotoLink(shares[row.album], shareUrl, row.mk) });
+  }
+  return json({ photos: list });
+}
+async function hidePhoto(request, env, hide, editingLocked = async () => isKodeshWindowActive((await zmanimData()).windows)) {
+  let body;
+  try {
+    body = await request.json();
+  } catch (_) {
+    return json({ error: "Invalid JSON" }, 400);
+  }
+  const album = body && body.album;
+  const id = photoId(body && body.src);
+  if ((album !== "main" && album !== "shabbat") || !id) return json({ error: "Expected { album, src }" }, 400);
+  if (await editingLocked()) return json({ error: "Editing is disabled during Shabbat/Yom Tov" }, 423);
+  if (!hide) {
+    await env.DB.prepare("DELETE FROM photo_hidden WHERE album = ? AND id = ?").bind(album, id).run();
+    return json({ ok: true });
+  }
+  const row = await env.DB.prepare(
+    "SELECT p.src, p.date, p.mk FROM album_photo p JOIN album_scan s ON s.album = p.album AND s.live_gen = p.gen WHERE p.album = ? AND p.id = ?"
+  ).bind(album, id).first().catch(() => null);
+  await env.DB.prepare(
+    "INSERT INTO photo_hidden (album, id, src, date, mk, hidden) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(album, id) DO UPDATE SET hidden = excluded.hidden"
+  ).bind(album, id, row ? row.src : `${id}=w1280-h800`, row ? row.date : null, row ? row.mk : null, Date.now()).run();
+  return json({ ok: true });
 }
 async function localPhotoManifest(request, env) {
   try {
@@ -889,6 +967,14 @@ var index_default = {
       }
     }
     if (url.pathname === "/api/photos" && request.method === "GET") return photos(request, env);
+    if (url.pathname === "/api/photos/hidden" && request.method === "GET") return hiddenPhotos(request, env);
+    if ((url.pathname === "/api/photos/hide" || url.pathname === "/api/photos/unhide") && request.method === "POST") {
+      try {
+        return await hidePhoto(request, env, url.pathname === "/api/photos/hide");
+      } catch (_) {
+        return json({ error: "Could not update hidden photos" }, 502);
+      }
+    }
     if (url.pathname === "/api/state/version" && request.method === "GET") {
       try {
         return await stateVersions(env);
@@ -919,6 +1005,7 @@ export {
   constantTimeEqual,
   index_default as default,
   expandCalendar,
+  hidePhoto,
   indexedAlbumPhotos,
   isKodeshWindowActive,
   mergeEvents,

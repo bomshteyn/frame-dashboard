@@ -19,12 +19,16 @@ Each `/api/photos?album=main` batch is 300 photos:
 
 Tune with the `PHOTO_*` constants in `worker/index.js`.
 
+## Hidden photos
+
+On the frame, the Photos screen has a **Hide** button, and pressing and holding the screensaver for 1 s opens the same dialog (a normal tap still wakes the dashboard). A hidden photo goes into `photo_hidden` and is left out of every batch. The phone page lists hidden photos under Frame → Hidden photos, with **Unhide** and a link to the photo in Google Photos for deleting it there (Google's API doesn't allow deleting or removing photos from a shared album). Code: `public/assets/photo-hide.js`, `/api/photos/hidden|hide|unhide` in `worker/index.js`.
+
 ## Deploy
 
 ```sh
 npm install
 npm test
-npx wrangler d1 execute frame-dashboard --remote --file migrations/0001_photo_seen.sql   # only when adding a migration
+npx wrangler d1 execute frame-dashboard --remote --file migrations/000N_name.sql   # only when adding a migration
 npx wrangler deploy
 ```
 

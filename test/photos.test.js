@@ -6,7 +6,7 @@ import worker from "../worker/index.js";
 
 function d1() {
   const sqlite = new DatabaseSync(":memory:");
-  for (const file of ["0000_initial.sql", "0001_photo_seen.sql"]) sqlite.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
+  for (const file of ["0000_initial.sql", "0001_photo_seen.sql", "0002_photo_hidden.sql"]) sqlite.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
   const statement = (sql, args = []) => ({
     sql, args,
     bind: (...next) => statement(sql, next),
@@ -90,4 +90,31 @@ test("falls back to plain random when photo_seen is missing", async () => {
   const body = await indexedAlbumPhotos(db, "main", NOW);
   assert.equal(body.photos.length, 10);
   assert.equal(body.fresh, undefined);
+});
+
+test("hidden photos are never served", async () => {
+  const db = d1();
+  seed(db, { old: 40, recentTaken: 10 });
+  db.sqlite.prepare("INSERT INTO photo_hidden (album, id, src, hidden) SELECT album, id, src, 1 FROM album_photo WHERE id IN ('old0', 'old1', 'taken40')").run();
+  const { indexedAlbumPhotos } = await import("../worker/index.js");
+  const ids = (await indexedAlbumPhotos(db, "main", NOW)).photos.map((p) => p.src.split("/").pop());
+  assert.equal(ids.length, 47);
+  for (const id of ["old0", "old1", "taken40"]) assert.ok(!ids.includes(id));
+});
+
+test("hide and unhide through the API", async () => {
+  const db = d1();
+  const id = "https://lh3.googleusercontent.com/pw/AP1abc_DEF-9";
+  db.sqlite.prepare("INSERT INTO album_photo (album, gen, id, src, date, o, mk) VALUES ('main', 1, ?, ?, '2020-01-01', 'l', 'AF1QipXYZ')").run(id, `${id}=w1280-h800`);
+  db.sqlite.prepare("INSERT INTO album_scan (album, live_gen, count) VALUES ('main', 1, 1)").run();
+  const { hidePhoto } = await import("../worker/index.js");
+  const call = (hide, src) => hidePhoto(new Request("https://x/", { method: "POST", body: JSON.stringify({ album: "main", src }) }), { DB: db }, hide, async () => false);
+  {
+    assert.equal((await call(true, "https://evil.example/x")).status, 400);
+    const r = await call(true, `${id}=w1280-h800`);
+    assert.equal(r.status, 200);
+    assert.deepEqual({ ...db.sqlite.prepare("SELECT id, mk, date FROM photo_hidden").get() }, { id, mk: "AF1QipXYZ", date: "2020-01-01" });
+    assert.equal((await call(false, `${id}=w600-h400`)).status, 200);
+    assert.equal(db.sqlite.prepare("SELECT COUNT(*) c FROM photo_hidden").get().c, 0);
+  }
 });
