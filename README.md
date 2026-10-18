@@ -3,7 +3,7 @@
 Family dashboard for the Android photo frames: Cloudflare Worker + D1 + static assets.
 
 - `worker/index.js` – Worker (API, auth, calendars, weather, Google Photos shared-album indexer, cron).
-- `public/` – built dashboard (`index.html`, `m.html` phone companion, `assets/`), local photo fallback, kiosk APK (`public/kiosk/`).
+- `public/` – built dashboard (`index.html`, `m.html` phone companion, `assets/`), local photo fallback, and the kiosk APK + `version.json` the frames update from (`public/kiosk/`). Kiosk app source: [bomshteyn/frame-kiosk](https://github.com/bomshteyn/frame-kiosk).
 - `migrations/` – D1 schema (all statements are idempotent).
 - `test/` – `npm test` (Node 24, uses `node:sqlite` as a D1 stand-in).
 
