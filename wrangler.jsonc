@@ -1,0 +1,17 @@
+{
+  "name": "frame-dashboard",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-09-30",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "html_handling": "none",
+    "run_worker_first": ["/", "/api/*", "/m*"]
+  },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "frame-dashboard", "database_id": "928b1368-5ffa-45e2-8f3f-841d69f6bd58", "migrations_dir": "migrations" }
+  ],
+  "triggers": { "crons": ["* * * * *"] }
+  // Secrets (set with `wrangler secret put`, never commit):
+  // CALENDARS, FAMILY_PIN, SESSION_SECRET, PHOTOS_ALBUM_URL, SHABBAT_ALBUM_URL
+}

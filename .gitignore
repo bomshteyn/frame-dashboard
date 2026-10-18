@@ -1,0 +1,5 @@
+node_modules/
+.wrangler/
+.wrangler-out/
+.dev.vars
+_recover/
