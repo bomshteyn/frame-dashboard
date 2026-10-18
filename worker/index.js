@@ -579,9 +579,15 @@ async function abandonAlbumScan(db, album, gen) {
 }
 async function finishAlbumScan(db, album, scan, now) {
   const row = await db.prepare("SELECT COUNT(*) AS count FROM album_photo WHERE album = ? AND gen = ?").bind(album, scan.scan_gen).first();
+  const known = await db.prepare("SELECT COUNT(*) AS count FROM photo_seen WHERE album = ?").bind(album).first().catch(() => null);
+  const seenStatements = known ? [
+    db.prepare("INSERT OR IGNORE INTO photo_seen (album, id, added) SELECT album, id, ? FROM album_photo WHERE album = ? AND gen = ?").bind(known.count ? now : 0, album, scan.scan_gen),
+    db.prepare("DELETE FROM photo_seen WHERE album = ? AND id NOT IN (SELECT id FROM album_photo WHERE album = ? AND gen = ?)").bind(album, album, scan.scan_gen)
+  ] : [];
   await db.batch([
     db.prepare("UPDATE album_scan SET live_gen = ?, scan_gen = NULL, token = NULL, sid = NULL, bl = NULL, aid = NULL, akey = NULL, started = NULL, finished = ?, count = ? WHERE album = ?").bind(scan.scan_gen, now, row ? row.count : 0, album),
-    db.prepare("DELETE FROM album_photo WHERE album = ? AND gen != ?").bind(album, scan.scan_gen)
+    db.prepare("DELETE FROM album_photo WHERE album = ? AND gen != ?").bind(album, scan.scan_gen),
+    ...seenStatements
   ]);
 }
 async function scanAlbum(db, album, shareUrl, fetcher = fetch, now = Date.now()) {
@@ -632,17 +638,54 @@ async function scanAlbum(db, album, shareUrl, fetcher = fetch, now = Date.now())
   } catch (_) {
   }
 }
-async function indexedAlbumPhotos(db, album) {
+var PHOTO_BATCH_SIZE = 300;
+var PHOTO_BATCH_NEW_MAX = 100;
+var PHOTO_NEW_ADDED_MS = 30 * 24 * 60 * 60 * 1e3;
+var PHOTO_NEW_TAKEN_MS = 90 * 24 * 60 * 60 * 1e3;
+var PHOTO_RECENTLY_SHOWN_MS = 24 * 60 * 60 * 1e3;
+function albumPhotoRow(row, album) {
+  const photo = { src: row.src, o: row.o === "p" ? "p" : "l", from: "family", tag: album };
+  if (row.date) photo.date = row.date;
+  return photo;
+}
+async function randomAlbumRows(db, album, gen) {
+  const result = await db.prepare("SELECT src, date, o FROM album_photo WHERE album = ? AND gen = ? ORDER BY RANDOM() LIMIT ?").bind(album, gen, PHOTO_BATCH_SIZE).all();
+  return result.results || [];
+}
+// Every batch: up to PHOTO_BATCH_NEW_MAX new photos (recently added to the album or recently taken),
+// filled up with random older photos, preferring ones not shown in the last day.
+async function mixedAlbumRows(db, album, gen, now) {
+  const isNew = "(COALESCE(s.added, 0) >= ? OR p.date >= ?)";
+  const base = "SELECT p.id, p.src, p.date, p.o FROM album_photo p LEFT JOIN photo_seen s ON s.album = p.album AND s.id = p.id WHERE p.album = ? AND p.gen = ? AND ";
+  const addedSince = now - PHOTO_NEW_ADDED_MS;
+  const takenSince = torontoDateKey(now - PHOTO_NEW_TAKEN_MS);
+  const [fresh, older] = await db.batch([
+    db.prepare(base + isNew + " ORDER BY RANDOM() LIMIT ?").bind(album, gen, addedSince, takenSince, PHOTO_BATCH_NEW_MAX),
+    db.prepare(base + "NOT " + isNew + " ORDER BY COALESCE(s.served, 0) >= ?, RANDOM() LIMIT ?").bind(album, gen, addedSince, takenSince, now - PHOTO_RECENTLY_SHOWN_MS, PHOTO_BATCH_SIZE)
+  ]);
+  const newRows = fresh.results || [];
+  const rows = newRows.concat((older.results || []).slice(0, PHOTO_BATCH_SIZE - newRows.length));
+  if (rows.length) {
+    await db.prepare("UPDATE photo_seen SET served = ? WHERE album = ? AND id IN (SELECT value FROM json_each(?))").bind(now, album, JSON.stringify(rows.map((row) => row.id))).run().catch(() => {});
+  }
+  return { rows, fresh: newRows.length };
+}
+async function indexedAlbumPhotos(db, album, now = Date.now()) {
   if (!db) return null;
   const scan = await db.prepare("SELECT live_gen, count FROM album_scan WHERE album = ?").bind(album).first();
   if (!scan || scan.live_gen == null) return null;
-  const result = await db.prepare("SELECT src, date, o FROM album_photo WHERE album = ? AND gen = ? ORDER BY RANDOM() LIMIT 300").bind(album, scan.live_gen).all();
-  const photos2 = (result.results || []).map((row) => {
-    const photo = { src: row.src, o: row.o === "p" ? "p" : "l", from: "family", tag: album };
-    if (row.date) photo.date = row.date;
-    return photo;
-  });
-  return { photos: photos2, total: Number.isFinite(scan.count) ? scan.count : photos2.length };
+  let rows, fresh;
+  if (album === "main") {
+    try {
+      ({ rows, fresh } = await mixedAlbumRows(db, album, scan.live_gen, now));
+    } catch (_) {
+    }
+  }
+  if (!rows) rows = await randomAlbumRows(db, album, scan.live_gen);
+  const photos2 = rows.map((row) => albumPhotoRow(row, album));
+  const body = { photos: photos2, total: Number.isFinite(scan.count) ? scan.count : photos2.length };
+  if (fresh != null) body.fresh = fresh;
+  return body;
 }
 async function photos(request, env) {
   const url = new URL(request.url);

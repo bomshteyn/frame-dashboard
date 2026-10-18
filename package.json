@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "check": "wrangler deploy --dry-run --outdir .wrangler-out",
-    "test": "node --test test/"
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "ical.js": "^2.1.0"
