@@ -30,7 +30,9 @@
   if (document.getElementById("mApp")) return phone();
   if (!document.getElementById("ambient")) return;
 
+  document.addEventListener("dragstart", function (e) { e.preventDefault(); }, true);
   css(
+    "#stage img{-webkit-user-drag:none;user-drag:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}#ambient{touch-action:none}" +
     ".hh-layer{position:absolute;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.62)}" +
     ".hh-card{background:var(--paper,#f2eee6);color:var(--ink,#1d1d1b);border-radius:28px;padding:34px 36px 30px;width:760px;max-width:92%;box-shadow:0 30px 80px rgba(0,0,0,.4)}" +
     ".hh-card h2{margin:0 0 8px;font-size:46px;line-height:1}.hh-card p{margin:0 0 22px;font-size:19px;opacity:.75}" +
@@ -76,10 +78,10 @@
     layer = null;
   }
   function open(stage) {
+    if (layer) return;
     if (App.kodeshActive) return App.toast("Editing is disabled during Shabbat/Yom Tov", { ms: 3000 });
     var photos = shownPhotos(stage);
     if (!photos.length) return;
-    close();
     layer = document.createElement("div");
     layer.className = "hh-layer";
     layer.innerHTML =
@@ -155,6 +157,7 @@
     startX = e.clientX; startY = e.clientY;
     cancelHold();
     holdTimer = setTimeout(function () {
+      holdTimer = null;
       held = true;
       open(amb.querySelector(".amb-stage"));
     }, 1000);
@@ -164,7 +167,13 @@
   });
   amb.addEventListener("pointerup", cancelHold);
   amb.addEventListener("pointercancel", cancelHold);
-  amb.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+  amb.addEventListener("contextmenu", function (e) {
+    e.preventDefault();
+    if (!holdTimer) return;
+    cancelHold();
+    held = true;
+    open(amb.querySelector(".amb-stage"));
+  });
   amb.addEventListener("click", function (e) {
     if (held) {
       held = false;
