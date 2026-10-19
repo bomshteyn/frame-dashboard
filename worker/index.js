@@ -726,46 +726,12 @@ async function hiddenPhotoIds(db, album) {
   const result = await db.prepare("SELECT id FROM photo_hidden WHERE album = ?").bind(album).all().catch(() => null);
   return new Set(((result && result.results) || []).map((row) => row.id));
 }
-var shareLinkCache = new Map();
-async function albumShareLink(shareUrl, fetcher = fetch) {
-  if (!shareUrl) return null;
-  if (shareLinkCache.has(shareUrl)) return shareLinkCache.get(shareUrl);
-  let link = null;
-  try {
-    let url = new URL(shareUrl);
-    if (url.hostname !== "photos.google.com") {
-      const response = await fetcher(url.toString(), { redirect: "follow", headers: ALBUM_PAGE_HEADERS });
-      url = new URL(response.url || url);
-    }
-    const match = /^\/share\/([^/]+)/.exec(url.pathname);
-    if (url.hostname === "photos.google.com" && match && url.searchParams.get("key")) {
-      link = { aid: match[1], key: url.searchParams.get("key") };
-      shareLinkCache.set(shareUrl, link);
-    }
-  } catch (_) {
-  }
-  return link;
-}
-function googlePhotoLink(share, shareUrl, mk) {
-  if (share && mk) return `https://photos.google.com/share/${share.aid}/photo/${mk}?key=${encodeURIComponent(share.key)}`;
-  if (share) return `https://photos.google.com/share/${share.aid}?key=${encodeURIComponent(share.key)}`;
-  return shareUrl || null;
-}
 function albumShareUrl(env, album) {
   return album === "main" ? env.PHOTOS_ALBUM_URL : env.SHABBAT_ALBUM_URL || env.PHOTOS_ALBUM_URL;
 }
 async function hiddenPhotos(request, env) {
-  const result = await env.DB.prepare(
-    "SELECT h.album, h.id, h.src, h.date, COALESCE(h.mk, (SELECT MAX(p.mk) FROM album_photo p WHERE p.album = h.album AND p.id = h.id)) AS mk, h.hidden FROM photo_hidden h ORDER BY h.hidden DESC LIMIT 500"
-  ).all();
-  const shares = {};
-  const list = [];
-  for (const row of result.results || []) {
-    const shareUrl = albumShareUrl(env, row.album);
-    if (!(row.album in shares)) shares[row.album] = await albumShareLink(shareUrl);
-    list.push({ album: row.album, id: row.id, src: row.src, date: row.date, hidden: row.hidden, link: googlePhotoLink(shares[row.album], shareUrl, row.mk) });
-  }
-  return json({ photos: list });
+  const result = await env.DB.prepare("SELECT album, id, src, date, hidden FROM photo_hidden ORDER BY hidden DESC LIMIT 500").all();
+  return json({ photos: result.results || [] });
 }
 async function hidePhoto(request, env, hide, editingLocked = async () => isKodeshWindowActive((await zmanimData()).windows)) {
   let body;
@@ -1002,12 +968,10 @@ var index_default = {
   }
 };
 export {
-  albumShareLink,
   buildKodeshWindows,
   constantTimeEqual,
   index_default as default,
   expandCalendar,
-  googlePhotoLink,
   hidePhoto,
   hiddenPhotos,
   indexedAlbumPhotos,

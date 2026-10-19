@@ -1,5 +1,5 @@
 // Hide a photo from all frames (frame: Photos view button or long-press on the screensaver;
-// phone page: Hidden photos list with Unhide and a link to Google Photos).
+// phone page: Hidden photos list with Unhide).
 (function () {
   var EYE_OFF = '<path d="M3 3l18 18"/><path d="M10.6 6.1A10.5 10.5 0 0 1 12 6c5 0 9 6 9 6a17 17 0 0 1-3.2 3.7M6.6 6.6C4.3 8.2 3 12 3 12s4 6 9 6c1.5 0 2.9-.4 4.1-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>';
   function icon(size) {
@@ -84,7 +84,7 @@
     layer.className = "hh-layer";
     layer.innerHTML =
       '<div class="hh-card" role="dialog" aria-modal="true" aria-label="Hide photo"><h2 class="serif">Hide ' + (photos.length > 1 ? "a photo" : "this photo") + " from the frame?</h2>" +
-      "<p>It won't show on any frame again. It stays in Google Photos. You can unhide or delete it from the phone page (Frame tab → Hidden photos).</p>" +
+      "<p>It won't show on any frame again. It stays in Google Photos. You can unhide it from the phone page (Frame tab → Hidden photos).</p>" +
       '<div class="hh-list">' +
       photos.map(function (p, i) {
         return '<div class="hh-item"><img src="' + esc(p.src) + '" alt=""><button class="btn btn--solid hh-danger" data-hh-hide="' + i + '">' + icon(22) + (photos.length > 1 ? "Hide this one" : "Hide photo") + "</button></div>";
@@ -179,8 +179,7 @@
     css(
       ".m-hh-row{display:flex;gap:12px;align-items:center;background:var(--card);border-radius:16px;margin:0 0 10px;padding:10px}" +
       ".m-hh-row img{width:72px;height:72px;border-radius:12px;object-fit:cover;background:var(--paper-2);flex:none}" +
-      ".m-hh-row span{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}.m-hh-row small{opacity:.7}" +
-      ".m-hh-row a{font-weight:800;font-size:14px;color:inherit}"
+      ".m-hh-row span{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}.m-hh-row small{opacity:.7}" 
     );
     function body() {
       if (error) return '<div class="m-empty">' + esc(error) + "</div>";
@@ -188,7 +187,6 @@
       if (!list.length) return '<div class="m-empty">No hidden photos. Hide one on the frame from the Photos screen, or press and hold the screensaver.</div>';
       return list.map(function (p) {
         return '<div class="m-hh-row"><img src="' + esc(p.src) + '" alt="" loading="lazy"><span><small>Hidden ' + esc(new Date(p.hidden).toLocaleDateString()) + (p.date ? " · taken " + esc(p.date) : "") + "</small>" +
-          (p.link ? '<a href="' + esc(p.link) + '" target="_blank" rel="noopener">Open in Google Photos ↗</a>' : "") +
           '</span><button type="button" class="m-mini" data-hh-unhide="' + esc(p.id) + '" data-hh-album="' + esc(p.album) + '">Unhide</button></div>';
       }).join("");
     }
@@ -216,7 +214,7 @@
       html: function () {
         if (!list && !error) setTimeout(load);
         return '<section class="m-frame-hidden"><div class="m-section-heading"><h2 class="serif">Hidden photos</h2></div>' +
-          '<p class="m-muted">These never show on the frames. To delete one for good, open it in Google Photos.</p><div data-hh-body>' + body() + "</div></section>";
+          '<p class="m-muted">These never show on the frames. They stay in Google Photos.</p><div data-hh-body>' + body() + "</div></section>";
       },
     };
     document.addEventListener("click", function (e) {

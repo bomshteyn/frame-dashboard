@@ -119,26 +119,3 @@ test("hide and unhide through the API", async () => {
   }
 });
 
-test("Google Photos link resolves a short album link and opens the exact photo", async () => {
-  const { albumShareLink, googlePhotoLink } = await import("../worker/index.js");
-  const short = "https://photos.app.goo.gl/abc123";
-  const fetcher = async (url, init) => {
-    assert.equal(init.redirect, "follow");
-    return { url: "https://photos.google.com/share/AF1QipALBUM?key=SECRETKEY" };
-  };
-  const share = await albumShareLink(short, fetcher);
-  assert.deepEqual(share, { aid: "AF1QipALBUM", key: "SECRETKEY" });
-  assert.equal(googlePhotoLink(share, short, "AF1QipPHOTO"), "https://photos.google.com/share/AF1QipALBUM/photo/AF1QipPHOTO?key=SECRETKEY");
-  assert.equal(googlePhotoLink(share, short, null), "https://photos.google.com/share/AF1QipALBUM?key=SECRETKEY");
-});
-
-test("hidden photo list picks up the media key from a later album scan", async () => {
-  const db = d1();
-  const id = "https://lh3.googleusercontent.com/pw/AP1later";
-  db.sqlite.prepare("INSERT INTO photo_hidden (album, id, src, date, mk, hidden) VALUES ('main', ?, ?, NULL, NULL, 5)").run(id, `${id}=w1280-h800`);
-  db.sqlite.prepare("INSERT INTO album_photo (album, gen, id, src, date, o, mk) VALUES ('main', 2, ?, ?, NULL, 'l', 'AF1QipLATER')").run(id, `${id}=w1280-h800`);
-  const { hiddenPhotos } = await import("../worker/index.js");
-  const env = { DB: db, PHOTOS_ALBUM_URL: "https://photos.google.com/share/AF1QipMAIN?key=K1" };
-  const body = await (await hiddenPhotos(new Request("https://x/api/photos/hidden"), env)).json();
-  assert.equal(body.photos[0].link, "https://photos.google.com/share/AF1QipMAIN/photo/AF1QipLATER?key=K1");
-});
