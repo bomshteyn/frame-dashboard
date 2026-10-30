@@ -23,6 +23,10 @@ Tune with the `PHOTO_*` constants in `worker/index.js`.
 
 On the frame, the Photos screen has a **Hide** button, and pressing and holding the screensaver for 1 s opens the same dialog (a normal tap still wakes the dashboard). A hidden photo goes into `photo_hidden` and is left out of every batch. The phone page lists hidden photos under Frame → Hidden photos with **Unhide**. Photos stay in Google Photos (Google's API doesn't allow deleting or removing photos from a shared album). Code: `public/assets/photo-hide.js`, `/api/photos/hidden|hide|unhide` in `worker/index.js`.
 
+## Shabbat shofar
+
+Frames play a shofar 15 minutes before candle lighting and again at candle lighting. The recording is “4 sjofar tonen.ogg” by Tom A. Fürstenberg (User:Tfursten), from Wikimedia Commons, licensed under [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/); it was trimmed and loudness-normalized for this feature.
+
 ## Deploy
 
 ```sh

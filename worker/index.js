@@ -13,7 +13,7 @@ var ZMANIM = [
   ["sunset", "Shkia"],
   ["tzeit7083deg", "Tzeis"]
 ];
-var STATE_KEYS = new Set(["tasks", "groceries", "photos-favs", "stores", "products", "people", "remote", "heartbeat"]);
+var STATE_KEYS = new Set(["tasks", "groceries", "photos-favs", "stores", "products", "people", "remote", "heartbeat", "shofar"]);
 var SESSION_SECONDS = 365 * 24 * 60 * 60;
 var LOGIN_WINDOW_MS = 15 * 60 * 1e3;
 var LOGIN_MAX_FAILURES = 5;
