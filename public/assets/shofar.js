@@ -250,7 +250,7 @@
       played = [];
     }
 
-    fetch("/assets/shofar.mp3").then(function (response) {
+    fetch("/assets/shofar-tekiah.mp3").then(function (response) {
       if (!response.ok) throw new Error("Shofar audio unavailable");
       return response.blob();
     }).then(function (blob) {
@@ -274,7 +274,7 @@
       }
       var audio;
       try {
-        audio = new Audio(blobUrl || "/assets/shofar.mp3");
+        audio = new Audio(blobUrl || "/assets/shofar-tekiah.mp3");
       } catch (_) {
         if (oldVolume !== null && bridge && bridge.setVolume) {
           try { bridge.setVolume(oldVolume); } catch (_) {}
@@ -320,9 +320,6 @@
       var event = due(windows(), Date.now(), played);
       if (!event) return;
       remember(event.key);
-      if (event.kind === "warn" && window.App && typeof App.toast === "function") {
-        try { App.toast("Candle lighting in 15 minutes", {}); } catch (_) {}
-      }
       if (setting.on) play(setting.volume);
     }
     function accept(result) {

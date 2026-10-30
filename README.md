@@ -25,7 +25,7 @@ On the frame, the Photos screen has a **Hide** button, and pressing and holding 
 
 ## Shabbat shofar
 
-Frames play a shofar 15 minutes before candle lighting and again at candle lighting. The recording is “4 sjofar tonen.ogg” by Tom A. Fürstenberg (User:Tfursten), from Wikimedia Commons, licensed under [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/); it was trimmed and loudness-normalized for this feature.
+Frames play one long tekiah 15 minutes before candle lighting and again at candle lighting. The tekiah is taken from “4 sjofar tonen.ogg” by Tom A. Fürstenberg (User:Tfursten), from Wikimedia Commons, licensed under [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/); its first tekiah was cut out, its steady middle extended to about 9 seconds, and loudness-normalized.
 
 ## Deploy
 
