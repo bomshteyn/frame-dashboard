@@ -13,7 +13,7 @@ var ZMANIM = [
   ["sunset", "Shkia"],
   ["tzeit7083deg", "Tzeis"]
 ];
-var STATE_KEYS = new Set(["tasks", "groceries", "photos-favs", "stores", "products", "people", "remote", "heartbeat", "shofar"]);
+var STATE_KEYS = new Set(["tasks", "groceries", "photos-favs", "stores", "products", "people", "remote", "heartbeat", "shofar", "music", "music_now_small", "music_now_large"]);
 var SESSION_SECONDS = 365 * 24 * 60 * 60;
 var LOGIN_WINDOW_MS = 15 * 60 * 1e3;
 var LOGIN_MAX_FAILURES = 5;
@@ -843,6 +843,356 @@ async function stateVersions(env) {
   });
   return json(keys);
 }
+async function musicAuth(env) {
+  let row = await env.DB.prepare("SELECT token, device_id, profile_json, email FROM music_auth WHERE id = 1").first();
+  if (!row) {
+    await env.DB.prepare("INSERT INTO music_auth (id, token, device_id, profile_json, email, updated) VALUES (1, NULL, ?, NULL, NULL, ?) ON CONFLICT(id) DO NOTHING")
+      .bind(crypto.randomUUID(), Date.now())
+      .run();
+    row = await env.DB.prepare("SELECT token, device_id, profile_json, email FROM music_auth WHERE id = 1").first();
+  }
+  return row;
+}
+function musicProfile(value) {
+  if (!value || typeof value !== "object") return null;
+  if (!Array.isArray(value)) {
+    for (const key of ["profile", "fh3", "selected_profile"]) {
+      const nested = musicProfile(value[key]);
+      if (nested) return nested;
+    }
+    if (value.id != null && typeof value.name === "string") {
+      return {
+        id: value.id,
+        name: value.name,
+        img: value.img ?? value.image ?? value.artwork ?? null
+      };
+    }
+    for (const item of Object.values(value)) {
+      const nested = musicProfile(item);
+      if (nested) return nested;
+    }
+  } else {
+    for (const item of value) {
+      const nested = musicProfile(item);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+function musicToken(value) {
+  const find = (node, key) => {
+    if (!node || typeof node !== "object") return null;
+    if (!Array.isArray(node) && typeof node[key] === "string" && node[key]) return node[key];
+    for (const child of Array.isArray(node) ? node : Object.values(node)) {
+      const token = find(child, key);
+      if (token) return token;
+    }
+    return null;
+  };
+  for (const key of ["token", "access_token", "api_token", "bearer"]) {
+    const token = find(value, key);
+    if (token) return token;
+  }
+  const findLongString = (node) => {
+    if (typeof node === "string") return node.length >= 30 ? node : null;
+    if (!node || typeof node !== "object") return null;
+    for (const child of Array.isArray(node) ? node : Object.values(node)) {
+      const token = findLongString(child);
+      if (token) return token;
+    }
+    return null;
+  };
+  return findLongString(value);
+}
+function musicTiles(value) {
+  const tiles = [];
+  const visit = (item) => {
+    if (!item || typeof item !== "object") return;
+    if (Array.isArray(item)) {
+      item.forEach(visit);
+      return;
+    }
+    if (typeof item.id === "number" && (item.title || item.name)) {
+      const rawKind = item.entity_type ?? item.type ?? item.content_type ?? "track";
+      const kind = String(rawKind).toLowerCase();
+      const artist = item.artist?.name ?? item.artists?.[0]?.name ?? item.subtitle ?? item.by;
+      const image = item.img ?? item.artwork ?? item.image;
+      tiles.push({
+        id: item.id,
+        kind: kind === "content" || kind === "music" ? "track" : kind,
+        title: String(item.title || item.name),
+        subtitle: typeof artist === "string" ? artist : artist?.name ?? "",
+        img: typeof image === "string" ? image : image?.url ?? image?.src ?? "",
+        length: item.length ?? item.duration ?? item.duration_seconds ?? null
+      });
+    }
+    Object.values(item).forEach(visit);
+  };
+  visit(value);
+  return tiles;
+}
+function musicHomeSections(value) {
+  const sections = [];
+  const titleKeys = /^(title|name|label|heading|section)$/i;
+  const containsTrack = (items) => items.some((item) => item && typeof item === "object" && !Array.isArray(item) && typeof item.id === "number" && (item.title || item.name));
+  const displayTitle = (value) => String(value || "Music").replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+  const visit = (item, fallbackTitle = "Music", preserveFallback = false) => {
+    if (!item || typeof item !== "object") return;
+    if (Array.isArray(item)) {
+      if (containsTrack(item)) sections.push({ title: preserveFallback ? fallbackTitle : displayTitle(fallbackTitle), tiles: musicTiles(item) });
+      else item.forEach((child) => visit(child, fallbackTitle));
+      return;
+    }
+    const title = Object.entries(item).find(([key, child]) => titleKeys.test(key) && typeof child === "string")?.[1];
+    for (const [key, child] of Object.entries(item)) {
+      if (Array.isArray(child)) {
+        if (containsTrack(child)) sections.push({ title: title || displayTitle(key), tiles: musicTiles(child) });
+        else child.forEach((nested) => visit(nested, title || displayTitle(key), !!title));
+      } else {
+        visit(child, title || fallbackTitle, !!title || preserveFallback);
+      }
+    }
+  };
+  visit(value);
+  if (!sections.length) {
+    const tiles = musicTiles(value);
+    if (tiles.length) sections.push({ title: "Music", tiles });
+  }
+  return sections;
+}
+function musicForm(data = {}) {
+  const values = new URLSearchParams();
+  for (const [key, value] of Object.entries(data)) {
+    if (Array.isArray(value)) {
+      for (const item of value) values.append(key.endsWith("[]") ? key : `${key}[]`, String(item));
+    } else if (value != null) {
+      values.append(key, String(value));
+    }
+  }
+  return values.toString();
+}
+async function clearMusicToken(env) {
+  await env.DB.prepare("UPDATE music_auth SET token = NULL, profile_json = NULL, updated = ? WHERE id = 1").bind(Date.now()).run();
+}
+async function musicUpstream(env, auth, path, method = "GET", body = null, includeToken = true) {
+  let response;
+  try {
+    const headers = new Headers({
+      accept: "application/json",
+      os: "Android",
+      "os-version": "29",
+      "app-version": "342",
+      "X-API-MINOR-VERSION": "17",
+      "X-PLATFORM-DEVICE": "Home HQ frame",
+      "X-DEVICE-SERIAL": "",
+      "X-PLATFORM-KEY": "production-android-44fd2f70",
+      "X-DEVICE-ID": auth.device_id,
+      "User-Agent": "okhttp/4.12.0"
+    });
+    if (body != null) headers.set("content-type", "application/x-www-form-urlencoded");
+    if (includeToken && auth.token) headers.set("authorization", `Bearer ${auth.token}`);
+    response = await fetch(`https://24six.app/api/v3/${path}`, {
+      method,
+      headers,
+      body: body == null ? undefined : musicForm(body)
+    });
+  } catch (_) {
+    return { error: json({ error: "24six unavailable", upstreamStatus: 0 }, 502) };
+  }
+  const text = await response.text();
+  let payload;
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch (_) {
+    payload = { message: text };
+  }
+  if (response.status === 401 || response.status === 403) {
+    await clearMusicToken(env);
+    return { error: json({ error: "24six login expired", relogin: true }, 403) };
+  }
+  if (!response.ok) {
+    return {
+      error: json({
+        error: typeof payload?.message === "string" ? payload.message : "24six request failed",
+        upstreamStatus: response.status
+      }, 502)
+    };
+  }
+  return { payload };
+}
+function musicDebug(url, payload, data) {
+  return url.searchParams.get("debug") === "1" ? { ...data, raw: payload } : data;
+}
+function findMusicString(value, predicate) {
+  if (typeof value === "string") return predicate(value) ? value : null;
+  if (!value || typeof value !== "object") return null;
+  for (const child of Array.isArray(value) ? value : Object.values(value)) {
+    const found = findMusicString(child, predicate);
+    if (found) return found;
+  }
+  return null;
+}
+function musicMetadata(value, key) {
+  if (!value || typeof value !== "object") return null;
+  if (!Array.isArray(value) && value[key] != null) {
+    const candidate = value[key];
+    if (typeof candidate === "string" || typeof candidate === "number") return candidate;
+    if (candidate && typeof candidate === "object") {
+      const nested = candidate.name ?? candidate.title ?? candidate.url ?? candidate.src;
+      if (nested != null) return nested;
+    }
+  }
+  for (const child of Array.isArray(value) ? value : Object.values(value)) {
+    const found = musicMetadata(child, key);
+    if (found != null) return found;
+  }
+  return null;
+}
+async function musicRoute(request, env, url) {
+  const pathname = url.pathname;
+  const method = request.method;
+  const auth = await musicAuth(env);
+  if (pathname === "/api/music/status" && method === "GET") {
+    let profile = null;
+    try {
+      profile = auth.profile_json ? JSON.parse(auth.profile_json) : null;
+    } catch (_) {}
+    return json({ connected: !!auth.token, email: auth.email, profile });
+  }
+  if (pathname === "/api/music/profiles" && method === "POST") {
+    const body = await request.json().catch(() => null);
+    if (!body || typeof body.email !== "string" || typeof body.password !== "string") return json({ error: "Email and password are required" }, 400);
+    const result = await musicUpstream(env, auth, "profile-list", "POST", { email: body.email, password: body.password }, false);
+    return result.error || json(result.payload);
+  }
+  if (pathname === "/api/music/login" && method === "POST") {
+    const body = await request.json().catch(() => null);
+    if (!body || typeof body.email !== "string" || typeof body.password !== "string") return json({ error: "Email and password are required" }, 400);
+    const result = await musicUpstream(env, auth, "login", "POST", {
+      email: body.email,
+      password: body.password,
+      profile_id: body.profile_id,
+      pin: body.pin,
+      device_name: "Home HQ frame"
+    }, false);
+    if (result.error) return result.error;
+    const payload = result.payload;
+    console.log(Object.keys(payload && typeof payload === "object" ? payload : {}));
+    const token = musicToken(payload);
+    if (!token) return json({ error: "24six login response did not contain a token" }, 502);
+    const profile = musicProfile(payload);
+    await env.DB.prepare("UPDATE music_auth SET token = ?, profile_json = ?, email = ?, updated = ? WHERE id = 1")
+      .bind(token, profile ? JSON.stringify(profile) : null, body.email, Date.now())
+      .run();
+    return json({ ok: true, profile });
+  }
+  if (pathname === "/api/music/profile" && method === "POST") {
+    if (!auth.token) return json({ error: "24six login expired", relogin: true }, 403);
+    const body = await request.json().catch(() => null);
+    if (!body || body.profile_id == null || typeof body.pin !== "string") return json({ error: "Profile and PIN are required" }, 400);
+    const result = await musicUpstream(env, auth, "profile/swap", "POST", {
+      profile_id: body.profile_id,
+      pin: body.pin,
+      device_name: "Home HQ frame"
+    });
+    if (result.error) return result.error;
+    console.log(Object.keys(result.payload && typeof result.payload === "object" ? result.payload : {}));
+    const token = musicToken(result.payload);
+    if (!token) return json({ error: "24six profile response did not contain a token" }, 502);
+    const profile = musicProfile(result.payload);
+    await env.DB.prepare("UPDATE music_auth SET token = ?, profile_json = COALESCE(?, profile_json), updated = ? WHERE id = 1")
+      .bind(token, profile ? JSON.stringify(profile) : null, Date.now())
+      .run();
+    return json({ ok: true, profile });
+  }
+  if (pathname === "/api/music/logout" && method === "POST") {
+    if (!auth.token) {
+      await clearMusicToken(env);
+      return json({ ok: true });
+    }
+    const result = await musicUpstream(env, auth, "logout", "POST", {});
+    if (result.error) return result.error;
+    await clearMusicToken(env);
+    return json({ ok: true });
+  }
+  const browseRequest = async (path, browseMethod = "GET", body = null) => {
+    if (!auth.token) return { error: json({ error: "24six login expired", relogin: true }, 403) };
+    return musicUpstream(env, auth, path, browseMethod, body);
+  };
+  if (pathname === "/api/music/home" && method === "GET") {
+    const result = await browseRequest("music?use_popularity_logic=1");
+    if (result.error) return result.error;
+    return json(musicDebug(url, result.payload, { sections: musicHomeSections(result.payload) }));
+  }
+  if (pathname === "/api/music/search" && method === "POST") {
+    const body = await request.json().catch(() => null);
+    if (!body || typeof body.q !== "string") return json({ error: "Search query is required" }, 400);
+    const result = await browseRequest("music/search", "POST", { q: body.q, type: ["music"], limit: 50 });
+    if (result.error) return result.error;
+    return json(musicDebug(url, result.payload, { tiles: musicTiles(result.payload) }));
+  }
+  if (pathname === "/api/music/library" && method === "GET") {
+    const result = await browseRequest("music/library");
+    if (result.error) return result.error;
+    return json(musicDebug(url, result.payload, { tiles: musicTiles(result.payload) }));
+  }
+  const listMatch = /^\/api\/music\/list\/(playlist|collection|artist)\/([^/]+)$/.exec(pathname);
+  if (listMatch && method === "GET") {
+    let id;
+    try {
+      id = decodeURIComponent(listMatch[2]);
+    } catch (_) {
+      return json({ error: "Invalid music list id" }, 400);
+    }
+    const path = listMatch[1] === "playlist"
+      ? `music/playlist/${encodeURIComponent(id)}?page=1`
+      : `music/${listMatch[1]}/${encodeURIComponent(id)}`;
+    const result = await browseRequest(path);
+    if (result.error) return result.error;
+    return json(musicDebug(url, result.payload, { tiles: musicTiles(result.payload) }));
+  }
+  if (pathname === "/api/music/recent" && method === "GET") {
+    const result = await browseRequest("music/content/recent");
+    if (result.error) return result.error;
+    return json(musicDebug(url, result.payload, { tiles: musicTiles(result.payload) }));
+  }
+  const streamMatch = /^\/api\/music\/stream\/([^/]+)$/.exec(pathname);
+  if (streamMatch && method === "GET") {
+    let id;
+    try {
+      id = decodeURIComponent(streamMatch[1]);
+    } catch (_) {
+      return json({ error: "Invalid track id" }, 400);
+    }
+    const result = await browseRequest(`music/content/${encodeURIComponent(id)}`, "POST", {});
+    if (result.error) return result.error;
+    const streamUrl = findMusicString(result.payload, (value) => value.includes(".m3u8"));
+    if (!streamUrl) return json({ error: "24six did not return a stream URL", upstreamStatus: 200 }, 502);
+    const tile = musicTiles(result.payload).find((item) => String(item.id) === id) || musicTiles(result.payload)[0];
+    const stream = {
+      id: Number(id),
+      url: streamUrl,
+      title: tile?.title ?? musicMetadata(result.payload, "title") ?? "",
+      artist: tile?.subtitle ?? musicMetadata(result.payload, "artist") ?? "",
+      img: tile?.img ?? musicMetadata(result.payload, "img") ?? musicMetadata(result.payload, "artwork") ?? "",
+      length: tile?.length ?? musicMetadata(result.payload, "length") ?? musicMetadata(result.payload, "duration") ?? null
+    };
+    return json(musicDebug(url, result.payload, stream));
+  }
+  if (pathname === "/api/music/log" && method === "POST") {
+    const body = await request.json().catch(() => null);
+    if (!body || body.id == null || !Number.isFinite(Number(body.seconds))) return json({ error: "Track id and seconds are required" }, 400);
+    const result = await browseRequest(`content/${encodeURIComponent(body.id)}/log`, "POST", {
+      seconds: Number(body.seconds),
+      current: Number(body.seconds),
+      streamed_at: new Date().toISOString(),
+      is_offline: 0
+    });
+    if (result.error) return result.error;
+    return json({ ok: true });
+  }
+  return json({ error: "Not found" }, 404);
+}
 async function state(request, env, key) {
   if (!STATE_KEYS.has(key)) return json({ error: "Unknown state key" }, 404);
   if (request.method === "GET") {
@@ -891,6 +1241,14 @@ var index_default = {
     }
     if ((url.pathname === "/m" || url.pathname === "/m/") && env.ASSETS) {
       return env.ASSETS.fetch(new Request(new URL("/m.html", request.url), request));
+    }
+    if (url.pathname.startsWith("/api/music/")) {
+      if (!await hasSession(request, env)) return json({ error: "Authentication required" }, 403);
+      try {
+        return await musicRoute(request, env, url);
+      } catch (_) {
+        return json({ error: "24six request failed", upstreamStatus: 0 }, 502);
+      }
     }
     if (url.pathname.startsWith("/api/")) {
       if (url.pathname === "/api/login" && request.method === "POST") {
@@ -976,6 +1334,8 @@ export {
   hiddenPhotos,
   indexedAlbumPhotos,
   isKodeshWindowActive,
+  musicTiles,
+  musicToken,
   mergeEvents,
   parseBatchExecutePage,
   parseSharedAlbumPage,
