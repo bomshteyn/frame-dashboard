@@ -33,6 +33,7 @@
       play: '<path d="m8 5 12 7-12 7z"/>',
       pause: '<path d="M8 5v14M16 5v14"/>',
       next: '<path d="M5 5v14l11-7z"/><path d="M19 5v14"/>',
+      prev: '<path d="M19 5v14L8 12z"/><path d="M5 5v14"/>',
       note: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>'
     };
     return `<svg class="music-chip__icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]}</svg>`;
@@ -502,6 +503,259 @@
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) updateMusicState();
   });
+
+  const musicViewState = {
+    root: null,
+    tab: "home",
+    tiles: [],
+    sections: [],
+    page: 1,
+    hasMore: false,
+    detail: null,
+    search: "",
+    loading: false
+  };
+  const musicTabs = [
+    ["home", "Home"],
+    ["artist", "Artists"],
+    ["collection", "Albums"],
+    ["playlist", "Playlists"],
+    ["category", "Categories"],
+    ["search", "Search"],
+    ["library", "Library"]
+  ];
+
+  function musicViewEscape(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    })[character]);
+  }
+
+  function musicViewIcon(name) {
+    return musicIcon(name).replace('class="music-chip__icon"', 'class="music-view-icon"');
+  }
+
+  function musicViewTile(tile, index) {
+    const image = tile.img
+      ? `<img src="${musicViewEscape(tile.img)}" alt="" draggable="false" loading="lazy">`
+      : `<span class="music-view-placeholder">${musicViewIcon("note")}</span>`;
+    const isTrack = tile.kind === "track" || tile.kind === "content" || tile.kind === "music";
+    return `<button class="music-view-tile" type="button" data-view-track="${isTrack ? "1" : "0"}" data-view-index="${index}" data-view-id="${musicViewEscape(tile.id)}" data-view-kind="${musicViewEscape(tile.kind || "playlist")}" data-view-title="${musicViewEscape(tile.title || "Untitled")}" data-view-artist="${musicViewEscape(tile.subtitle || "")}" data-view-img="${musicViewEscape(tile.img || "")}">${image}<span class="music-view-tile-copy"><strong>${musicViewEscape(tile.title || "Untitled")}</strong><small>${musicViewEscape(tile.subtitle || "")}</small></span></button>`;
+  }
+
+  function renderMusicPlayer() {
+    const root = musicViewState.root?.querySelector("[data-music-view-player]");
+    if (!root) return;
+    const tracks = Array.isArray(musicState?.queue) ? musicState.queue : [];
+    const index = Number(musicState?.index) || activeIndex;
+    const track = tracks[index] || activeTrack || {};
+    const cover = track.img
+      ? `<img class="music-view-art" src="${musicViewEscape(track.img)}" alt="" draggable="false">`
+      : `<div class="music-view-art music-view-placeholder">${musicViewIcon("note")}</div>`;
+    const nextTracks = tracks.slice(index + 1);
+    const progress = audio.duration ? Math.round((audio.currentTime / audio.duration) * 100) : 0;
+    root.innerHTML = `<div class="music-view-now">${cover}<div class="music-view-copy"><small>NOW PLAYING</small><h1>${musicViewEscape(track.title || "Choose something to play")}</h1><p>${musicViewEscape(track.artist || track.subtitle || "")}</p></div><input class="music-view-progress" data-music-seek type="range" min="0" max="100" value="${progress}" aria-label="Track progress"><div class="music-view-controls"><button type="button" data-player-action="prev" aria-label="Previous">${musicViewIcon("prev")}</button><button type="button" data-player-action="toggle" aria-label="Play or pause">${musicViewIcon(playerPlaying ? "pause" : "play")}</button><button type="button" data-player-action="next" aria-label="Next">${musicViewIcon("next")}</button></div><label class="music-view-volume">Volume<input type="range" data-player-volume min="0" max="100" value="${Number(musicState?.volume ?? 70)}" aria-label="Volume"></label><h2>Up next</h2><div class="music-view-upnext">${nextTracks.length ? nextTracks.map((item, nextIndex) => `<button type="button" data-player-queue="${index + nextIndex + 1}">${musicViewEscape(item.title || "Untitled")}<small>${musicViewEscape(item.artist || "")}</small></button>`).join("") : `<p>${tracks.length ? "End of queue" : "Your queue will appear here."}</p>`}</div>${playbackError ? `<p class="music-view-error">${musicViewEscape(playbackError)}</p>` : ""}</div>`;
+  }
+
+  function renderMusicBrowser() {
+    const root = musicViewState.root?.querySelector("[data-music-view-browser]");
+    if (!root) return;
+    const activeLabel = musicTabs.find(([id]) => id === musicViewState.tab)?.[1] || "Music";
+    let content = "";
+    if (musicViewState.tab === "search") {
+      content = `<form class="music-view-search" data-music-search><input type="search" name="keyword" data-music-search-input value="${musicViewEscape(musicViewState.search)}" placeholder="Search artists, albums and songs" aria-label="Search 24six"><button type="submit">Search</button></form><div class="music-view-keyboard" data-music-keyboard aria-label="On-screen keyboard">${["QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"].map((row) => `<div>${Array.from(row).map((key) => `<button type="button" data-soft-key="${key}">${key}</button>`).join("")}</div>`).join("")}<div class="music-view-keyboard-actions"><button type="button" data-soft-key="space">Space</button><button type="button" data-soft-key="backspace">⌫</button><button type="button" data-soft-key="clear">Clear</button></div></div>`;
+    }
+    if (musicViewState.detail) {
+      const detail = musicViewState.detail;
+      const tracks = detail.tiles || [];
+      content = `<button type="button" class="music-view-back" data-view-back>‹ Back</button><h2>${musicViewEscape(detail.title || "Music")}</h2><button type="button" class="music-view-play-all" data-view-play-all>Play all</button><div class="music-view-tracklist">${tracks.map((track, index) => `<button type="button" data-view-detail-track="${index}"><span>${index + 1}</span><strong>${musicViewEscape(track.title || "Untitled")}</strong><small>${musicViewEscape(track.subtitle || "")}</small>${musicViewIcon("play")}</button>`).join("")}</div>`;
+    } else if (musicViewState.tab === "home" && musicViewState.sections.length) {
+      content += musicViewState.sections.map((section) => `<section class="music-view-shelf"><h2>${musicViewEscape(section.title)}</h2><div class="music-view-grid">${(section.tiles || []).map(musicViewTile).join("")}</div></section>`).join("");
+    } else {
+      content += `<div class="music-view-grid">${musicViewState.tiles.map(musicViewTile).join("")}</div>`;
+      if (musicViewState.hasMore) content += `<button type="button" class="music-view-more" data-view-more>Load more</button>`;
+      if (!musicViewState.tiles.length && !musicViewState.loading) content += `<p class="music-view-empty">No music found.</p>`;
+    }
+    root.innerHTML = `<header class="music-view-heading"><p>24six</p><h2>${musicViewEscape(activeLabel)}</h2></header><nav class="music-view-tabs" aria-label="Music catalog">${musicTabs.map(([id, label]) => `<button type="button" data-view-tab="${id}" class="${musicViewState.tab === id ? "is-active" : ""}">${label}</button>`).join("")}</nav><div class="music-view-content" data-music-view-content>${content}</div>`;
+  }
+
+  async function fetchMusicBrowse(tab, page = 1, keyword = "") {
+    musicViewState.loading = true;
+    musicViewState.tab = tab;
+    musicViewState.page = page;
+    musicViewState.detail = null;
+    renderMusicBrowser();
+    try {
+      let result;
+      if (tab === "home") {
+        result = await fetch("/api/music/home", { cache: "no-store" }).then((response) => response.json());
+        musicViewState.sections = result.sections || [];
+        musicViewState.tiles = [];
+        musicViewState.hasMore = false;
+      } else if (tab === "library") {
+        result = await fetch("/api/music/library", { cache: "no-store" }).then((response) => response.json());
+        musicViewState.tiles = result.tiles || [];
+        musicViewState.hasMore = false;
+      } else if (tab === "search") {
+        musicViewState.search = keyword;
+        result = await fetch("/api/music/search", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ q: keyword }) }).then((response) => response.json());
+        musicViewState.tiles = result.tiles || [];
+        musicViewState.hasMore = false;
+      } else {
+        const params = new URLSearchParams({ page: String(page) });
+        if (keyword) params.set("keyword", keyword);
+        result = await fetch(`/api/music/browse/${tab}?${params}`, { cache: "no-store" }).then((response) => response.json());
+        musicViewState.tiles = page > 1 ? [...musicViewState.tiles, ...(result.tiles || [])] : result.tiles || [];
+        musicViewState.hasMore = !!result.hasMore;
+      }
+    } catch (_) {
+      musicViewState.tiles = [];
+      musicViewState.sections = [];
+      musicViewState.hasMore = false;
+    }
+    musicViewState.loading = false;
+    renderMusicBrowser();
+  }
+
+  async function openMusicDetail(kind, id, title) {
+    try {
+      const response = await fetch(`/api/music/list/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`, { cache: "no-store" });
+      const result = await response.json();
+      musicViewState.detail = { kind, id, title, tiles: result.tiles || [] };
+    } catch (_) {
+      musicViewState.detail = { title, tiles: [] };
+    }
+    renderMusicBrowser();
+  }
+
+  async function persistMusicCommand(commandQueue, index, command = "play", argument = index) {
+    try {
+      let response = await fetch("/api/state/music", { cache: "no-store" });
+      let current = await response.json();
+      const next = {
+        target: frameLabel,
+        queue: commandQueue,
+        index,
+        playing: command === "pause" || command === "stop" ? false : command === "volume" ? !!musicState?.playing : true,
+        volume: command === "volume" ? Number(argument) : Number(musicState?.volume ?? 70),
+        seq: (Number(musicState?.seq) || 0) + 1,
+        cmd: command,
+        arg: argument,
+        at: new Date().toISOString()
+      };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        response = await fetch("/api/state/music", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ json: next, base: Number(current.updated) || 0 })
+        });
+        const result = await response.json();
+        if (response.status === 409) {
+          current = result;
+          continue;
+        }
+        if (!response.ok) throw new Error(result.error || "Could not update playback");
+        musicState = next;
+        musicVersion = Number(result.updated) || musicVersion;
+        safeStorageSet(sequenceKey, next.seq);
+        applyCommand(next);
+        renderMusicPlayer();
+        return;
+      }
+    } catch (error) {
+      playbackError = error.message || "Could not update playback";
+      renderMusicPlayer();
+    }
+  }
+
+  function buildMusicView(element) {
+    musicViewState.root = element;
+    element.innerHTML = `<div class="music-view"><section class="music-view-player" data-music-view-player></section><section class="music-view-browser" data-music-view-browser></section></div>`;
+    element.addEventListener("click", async (event) => {
+      const button = event.target.closest("button");
+      if (!button) return;
+      if (button.dataset.softKey) {
+        const input = element.querySelector("[data-music-search-input]");
+        if (input) {
+          const key = button.dataset.softKey;
+          if (key === "space") input.value += " ";
+          else if (key === "backspace") input.value = input.value.slice(0, -1);
+          else if (key === "clear") input.value = "";
+          else input.value += key;
+          musicViewState.search = input.value;
+        }
+        return;
+      }
+      if (button.dataset.viewTab) return fetchMusicBrowse(button.dataset.viewTab, 1);
+      if (button.hasAttribute("data-view-more")) return fetchMusicBrowse(musicViewState.tab, musicViewState.page + 1);
+      if (button.hasAttribute("data-view-back")) {
+        musicViewState.detail = null;
+        return renderMusicBrowser();
+      }
+      if (button.dataset.viewTrack === "1") {
+        const tile = { id: Number(button.dataset.viewId), title: button.dataset.viewTitle, artist: button.dataset.viewArtist, img: button.dataset.viewImg };
+        return persistMusicCommand([tile], 0);
+      }
+      if (button.dataset.viewId) return openMusicDetail(button.dataset.viewKind, button.dataset.viewId, button.dataset.viewTitle);
+      if (button.hasAttribute("data-view-play-all")) {
+        const tracks = (musicViewState.detail?.tiles || []).filter((tile) => tile.kind === "track").map((tile) => ({ id: tile.id, title: tile.title, artist: tile.subtitle, img: tile.img }));
+        if (tracks.length) return persistMusicCommand(tracks, 0);
+      }
+      if (button.dataset.viewDetailTrack != null) {
+        const tracks = (musicViewState.detail?.tiles || []).filter((tile) => tile.kind === "track").map((tile) => ({ id: tile.id, title: tile.title, artist: tile.subtitle, img: tile.img }));
+        if (tracks.length) return persistMusicCommand(tracks, Number(button.dataset.viewDetailTrack));
+      }
+      if (button.dataset.playerAction === "toggle") return persistMusicCommand(musicState?.queue || [], Number(musicState?.index) || 0, playerPlaying ? "pause" : "resume");
+      if (button.dataset.playerAction === "next") return persistMusicCommand(musicState?.queue || [], Number(musicState?.index) || 0, "next");
+      if (button.dataset.playerAction === "prev") return persistMusicCommand(musicState?.queue || [], Number(musicState?.index) || 0, "prev");
+      if (button.dataset.playerQueue != null) return persistMusicCommand(musicState?.queue || [], Number(button.dataset.playerQueue), "play", Number(button.dataset.playerQueue));
+    });
+    element.addEventListener("submit", (event) => {
+      if (!event.target.matches("[data-music-search]")) return;
+      event.preventDefault();
+      const keyword = new FormData(event.target).get("keyword").toString().trim();
+      fetchMusicBrowse("search", 1, keyword);
+    });
+    element.addEventListener("input", (event) => {
+      if (event.target.matches("[data-player-volume]")) {
+        setVolume(event.target.value);
+        persistMusicCommand(musicState?.queue || [], Number(musicState?.index) || 0, "volume", Number(event.target.value));
+      }
+      if (event.target.matches("[data-music-seek]") && audio.duration) {
+        audio.currentTime = audio.duration * Number(event.target.value) / 100;
+      }
+    });
+    element.addEventListener("scroll", (event) => {
+      const panel = event.target.closest("[data-music-view-content]");
+      if (panel && panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 180 && musicViewState.hasMore && !musicViewState.loading) {
+        fetchMusicBrowse(musicViewState.tab, musicViewState.page + 1);
+      }
+    }, true);
+    element.addEventListener("dragstart", (event) => event.preventDefault(), true);
+    element.classList.toggle("is-kodesh", !!window.App?.kodeshActive);
+    element.dataset.musicBuilt = "true";
+    renderMusicPlayer();
+    fetchMusicBrowse("home");
+  }
+
+  if (typeof window.App?.register === "function") {
+    window.App.register("music", {
+      show: (element) => {
+        if (element.dataset.musicBuilt !== "true") buildMusicView(element);
+        else {
+          musicViewState.root = element;
+          renderMusicPlayer();
+          renderMusicBrowser();
+        }
+      },
+      resume: () => renderMusicPlayer(),
+      hide: () => {}
+    });
+    window.App.on("data", () => {
+      const root = document.getElementById("view-music");
+      if (root) root.classList.toggle("is-kodesh", !!window.App.kodeshActive);
+    });
+  }
 
   loadNowVersion().then(() => {
     updateMusicState().finally(schedulePoll);
