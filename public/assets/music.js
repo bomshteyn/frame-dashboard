@@ -142,7 +142,10 @@
   chip.addEventListener("dragstart", (event) => event.preventDefault());
   chip.addEventListener("click", (event) => {
     const button = event.target.closest("button");
-    if (!button) return;
+    if (!button) {
+      if (typeof window.App?.go === "function") window.App.go("music");
+      return;
+    }
     if (button.hasAttribute("data-music-close")) {
       stopCurrentPlayback(true);
     } else if (button.hasAttribute("data-music-next")) {
