@@ -274,11 +274,30 @@ test("home groups section arrays and search serializes type arrays", async () =>
     raw: home
   });
 
+  const searchPayload = {
+    artists: [{ id: 21, type: "artist", title: "Artist One" }],
+    collections: [{
+      id: 22,
+      type: "collection",
+      title: "Album One",
+      artists: [{ id: 221, type: "artist", name: "Collection Artist" }]
+    }],
+    content: [{
+      id: 23,
+      type: "content",
+      title: "Song One",
+      artists: [{ id: 231, type: "artist", name: "Content Artist" }],
+      collection: { id: 232, type: "collection", title: "Nested Album" },
+      artwork: { url: "https://images.test/song-one.jpg" },
+      length: 195
+    }],
+    playlists: [{ id: 24, type: "playlist", title: "Playlist One" }]
+  };
   let formBody;
   const searchResponse = await withFetch(async (url, init) => {
     assert.equal(String(url), "https://24six.app/api/v3/music/search");
     formBody = new URLSearchParams(init.body);
-    return upstreamResponse({ results: [] });
+    return upstreamResponse(searchPayload);
   }, () => worker.fetch(apiRequest("/api/music/search", {
     method: "POST",
     body: { q: "artist" },
@@ -286,8 +305,16 @@ test("home groups section arrays and search serializes type arrays", async () =>
   }), env));
   assert.equal(searchResponse.status, 200);
   assert.equal(formBody.get("q"), "artist");
-  assert.deepEqual(formBody.getAll("type[]"), ["music"]);
+  assert.deepEqual(formBody.getAll("type[]"), ["artist", "collection", "content", "playlist"]);
   assert.equal(formBody.get("limit"), "50");
+  assert.deepEqual(await searchResponse.json(), {
+    tiles: [
+      { id: 21, kind: "artist", title: "Artist One", subtitle: "", img: "", length: null },
+      { id: 22, kind: "collection", title: "Album One", subtitle: "Collection Artist", img: "", length: null },
+      { id: 23, kind: "track", title: "Song One", subtitle: "Content Artist", img: "https://images.test/song-one.jpg", length: 195 },
+      { id: 24, kind: "playlist", title: "Playlist One", subtitle: "", img: "", length: null }
+    ]
+  });
 });
 
 test("catalog browse routes use exact upstream URLs and preserve pagination data", async () => {

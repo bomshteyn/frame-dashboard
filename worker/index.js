@@ -904,6 +904,23 @@ function musicToken(value) {
   };
   return findLongString(value);
 }
+function musicTile(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item) || typeof item.id !== "number" || !(item.title || item.name)) {
+    return null;
+  }
+  const rawKind = item.entity_type ?? item.type ?? item.content_type ?? "track";
+  const kind = String(rawKind).toLowerCase();
+  const artist = item.artist?.name ?? item.artists?.[0]?.name ?? item.subtitle ?? item.by;
+  const image = item.img ?? item.artwork ?? item.image;
+  return {
+    id: item.id,
+    kind: kind === "content" || kind === "music" ? "track" : kind,
+    title: String(item.title || item.name),
+    subtitle: typeof artist === "string" ? artist : artist?.name ?? "",
+    img: typeof image === "string" ? image : image?.url ?? image?.src ?? "",
+    length: item.length ?? item.duration ?? item.duration_seconds ?? null
+  };
+}
 function musicTiles(value) {
   const tiles = [];
   const visit = (item) => {
@@ -912,24 +929,17 @@ function musicTiles(value) {
       item.forEach(visit);
       return;
     }
-    if (typeof item.id === "number" && (item.title || item.name)) {
-      const rawKind = item.entity_type ?? item.type ?? item.content_type ?? "track";
-      const kind = String(rawKind).toLowerCase();
-      const artist = item.artist?.name ?? item.artists?.[0]?.name ?? item.subtitle ?? item.by;
-      const image = item.img ?? item.artwork ?? item.image;
-      tiles.push({
-        id: item.id,
-        kind: kind === "content" || kind === "music" ? "track" : kind,
-        title: String(item.title || item.name),
-        subtitle: typeof artist === "string" ? artist : artist?.name ?? "",
-        img: typeof image === "string" ? image : image?.url ?? image?.src ?? "",
-        length: item.length ?? item.duration ?? item.duration_seconds ?? null
-      });
-    }
+    const tile = musicTile(item);
+    if (tile) tiles.push(tile);
     Object.values(item).forEach(visit);
   };
   visit(value);
   return tiles;
+}
+function musicSearchTiles(payload) {
+  return ["artists", "collections", "content", "playlists"].flatMap((key) =>
+    Array.isArray(payload?.[key]) ? payload[key].map(musicTile).filter(Boolean) : []
+  );
 }
 function musicHomeSections(value) {
   const sections = [];
@@ -1131,9 +1141,9 @@ async function musicRoute(request, env, url) {
   if (pathname === "/api/music/search" && method === "POST") {
     const body = await request.json().catch(() => null);
     if (!body || typeof body.q !== "string") return json({ error: "Search query is required" }, 400);
-    const result = await browseRequest("music/search", "POST", { q: body.q, type: ["music"], limit: 50 });
+    const result = await browseRequest("music/search", "POST", { q: body.q, type: ["artist", "collection", "content", "playlist"], limit: 50 });
     if (result.error) return result.error;
-    return json(musicDebug(url, result.payload, { tiles: musicTiles(result.payload) }));
+    return json(musicDebug(url, result.payload, { tiles: musicSearchTiles(result.payload) }));
   }
   if (pathname === "/api/music/library" && method === "GET") {
     const result = await browseRequest("music/library");
