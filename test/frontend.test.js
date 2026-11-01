@@ -28,11 +28,26 @@ test("phone page loads its readable source assets", () => {
 test("frame loads the lazy local music player", () => {
   const html = readFileSync("public/index.html", "utf8");
   const player = readFileSync("public/assets/music.js", "utf8");
-  assert.match(html, /src="\/assets\/music\.js\?v=5"/);
+  assert.match(html, /src="\/assets\/music\.js\?v=6"/);
   assert.match(html, /href="\/assets\/music\.css\?v=5"/);
   assert.match(html, /href="\/assets\/music-view\.css\?v=2"/);
   assert.doesNotMatch(html, /hls\.light\.min\.js/);
   assert.match(player, /script\.src = "\/assets\/hls\.light\.min\.js"/);
+});
+
+test("music icons use the 24six mark in app navigation and placeholders", () => {
+  const html = readFileSync("public/index.html", "utf8");
+  const phone = readFileSync("public/assets/phone/app.js", "utf8");
+  const player = readFileSync("public/assets/music.js", "utf8");
+  const currentColorMark = /<path d="([^"]+)" fill="currentColor" stroke="none" transform="translate\(3\.2 1\.9\) scale\(0\.84\)"\/>/;
+  const railMark = html.slice(html.indexOf('data-go="music"')).match(currentColorMark)?.[1];
+  const phoneMark = phone.slice(phone.indexOf("var musicMark")).match(currentColorMark)?.[1];
+  const frameMark = player.slice(player.indexOf("note:")).match(/<path d="([^"]+)" fill="#FFB84A" stroke="none" transform="translate\(3\.2 1\.9\) scale\(0\.84\)"\/>/)?.[1];
+  assert.ok(railMark);
+  assert.equal(phoneMark, railMark);
+  assert.equal(frameMark, railMark);
+  assert.match(phone, /music: musicMark,/);
+  assert.match(phone, /item\[2\] === `music` \? musicMark : window\.ICONS\[item\[2\]\]/);
 });
 
 test("frame music uses a frame-local playback queue and index", () => {
