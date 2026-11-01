@@ -156,32 +156,83 @@ test("logout uses the exact 24six logout URL", async () => {
   assert.equal(DB.sqlite.prepare("SELECT token FROM music_auth WHERE id = 1").get().token, null);
 });
 
-test("stream URL is deep-searched and debug returns the upstream JSON", async () => {
+test("stream URL comes from the play redirect and metadata comes from the content response", async () => {
   const { DB, env, cookie } = await authenticated();
   DB.sqlite.prepare("INSERT INTO music_auth (id, token, device_id, updated) VALUES (1, ?, ?, ?)")
     .run("valid-token", "00000000-0000-4000-8000-000000000002", Date.now());
-  const raw = {
-    metadata: { id: 42, title: "Deep Song", artist: { name: "The Artist" }, img: "https://images.test/cover.jpg", duration: 190 },
-    nested: [{ source: { manifest: "https://stream.test/live/index.m3u8?signature=abc" } }]
+  const metadata = {
+    metadata: { id: 42, title: "Metadata Song", artist: { name: "The Artist" }, img: "https://images.test/cover.jpg", duration: 190 }
   };
-  let request;
+  const requests = [];
   const response = await withFetch(async (url, init) => {
-    request = { url: String(url), init };
-    return upstreamResponse(raw);
+    const request = { url: String(url), init };
+    requests.push(request);
+    if (request.url === "https://24six.app/api/v3/music/content/42") return upstreamResponse(metadata);
+    assert.equal(request.url, "https://24six.app/api/v3/content/42/play?format=m3u8");
+    return new Response(null, {
+      status: 302,
+      headers: { location: "https://stream.test/x.m3u8?token=abc" }
+    });
   }, () => worker.fetch(apiRequest("/api/music/stream/42?debug=1", { cookie }), env));
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
     id: 42,
-    url: "https://stream.test/live/index.m3u8?signature=abc",
-    title: "Deep Song",
+    url: "https://stream.test/x.m3u8?token=abc",
+    title: "Metadata Song",
     artist: "The Artist",
     img: "https://images.test/cover.jpg",
     length: 190,
-    raw
+    raw: metadata
   });
-  assert.equal(request.url, "https://24six.app/api/v3/music/content/42");
-  assert.equal(request.init.method, "POST");
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].url, "https://24six.app/api/v3/music/content/42");
+  assert.equal(requests[0].init.method, "POST");
+  assert.equal(requests[1].url, "https://24six.app/api/v3/content/42/play?format=m3u8");
+  assert.equal(requests[1].init.method, "GET");
+  assert.equal(requests[1].init.redirect, "manual");
+  assert.equal(requests[1].init.headers.get("authorization"), "Bearer valid-token");
+});
+
+test("stream URL falls back to a nested m3u8 in the play response", async () => {
+  const { DB, env, cookie } = await authenticated();
+  DB.sqlite.prepare("INSERT INTO music_auth (id, token, device_id, updated) VALUES (1, ?, ?, ?)")
+    .run("valid-token", "00000000-0000-4000-8000-000000000008", Date.now());
+  const metadata = { metadata: { id: 42, title: "Fallback Song", artist: { name: "The Artist" } } };
+  const playPayload = {
+    nested: [{ source: { manifest: "https://stream.test/live/index.m3u8?signature=abc" } }]
+  };
+  const response = await withFetch(async (url) => {
+    if (String(url) === "https://24six.app/api/v3/music/content/42") return upstreamResponse(metadata);
+    assert.equal(String(url), "https://24six.app/api/v3/content/42/play?format=m3u8");
+    return upstreamResponse(playPayload);
+  }, () => worker.fetch(apiRequest("/api/music/stream/42", { cookie }), env));
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    id: 42,
+    url: "https://stream.test/live/index.m3u8?signature=abc",
+    title: "Fallback Song",
+    artist: "The Artist",
+    img: "",
+    length: null
+  });
+});
+
+test("a play endpoint 401 clears the token and requires relogin", async () => {
+  const { DB, env, cookie } = await authenticated();
+  DB.sqlite.prepare("INSERT INTO music_auth (id, token, device_id, updated) VALUES (1, ?, ?, ?)")
+    .run("expired-token", "00000000-0000-4000-8000-000000000009", Date.now());
+  const response = await withFetch(async (url, init) => {
+    if (String(url) === "https://24six.app/api/v3/music/content/42") return upstreamResponse({ title: "Song" });
+    assert.equal(String(url), "https://24six.app/api/v3/content/42/play?format=m3u8");
+    assert.equal(init.headers.get("authorization"), "Bearer expired-token");
+    return upstreamResponse({ message: "expired" }, 401);
+  }, () => worker.fetch(apiRequest("/api/music/stream/42", { cookie }), env));
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), { error: "24six login expired", relogin: true });
+  assert.equal(DB.sqlite.prepare("SELECT token FROM music_auth WHERE id = 1").get().token, null);
 });
 
 test("musicTiles normalizes nested tracks", () => {

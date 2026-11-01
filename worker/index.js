@@ -974,7 +974,7 @@ function musicForm(data = {}) {
 async function clearMusicToken(env) {
   await env.DB.prepare("UPDATE music_auth SET token = NULL, profile_json = NULL, updated = ? WHERE id = 1").bind(Date.now()).run();
 }
-async function musicUpstream(env, auth, path, method = "GET", body = null, includeToken = true) {
+async function musicUpstream(env, auth, path, method = "GET", body = null, includeToken = true, options = {}) {
   let response;
   try {
     const headers = new Headers({
@@ -994,10 +994,18 @@ async function musicUpstream(env, auth, path, method = "GET", body = null, inclu
     response = await fetch(`https://24six.app/api/v3/${path}`, {
       method,
       headers,
-      body: body == null ? undefined : musicForm(body)
+      body: body == null ? undefined : musicForm(body),
+      ...options
     });
   } catch (_) {
     return { error: json({ error: "24six unavailable", upstreamStatus: 0 }, 502) };
+  }
+  if (response.status === 401 || response.status === 403) {
+    await clearMusicToken(env);
+    return { error: json({ error: "24six login expired", relogin: true }, 403) };
+  }
+  if (response.status >= 300 && response.status < 400) {
+    return { location: response.headers.get("location") };
   }
   const text = await response.text();
   let payload;
@@ -1005,10 +1013,6 @@ async function musicUpstream(env, auth, path, method = "GET", body = null, inclu
     payload = text ? JSON.parse(text) : {};
   } catch (_) {
     payload = { message: text };
-  }
-  if (response.status === 401 || response.status === 403) {
-    await clearMusicToken(env);
-    return { error: json({ error: "24six login expired", relogin: true }, 403) };
   }
   if (!response.ok) {
     return {
@@ -1191,7 +1195,19 @@ async function musicRoute(request, env, url) {
     }
     const result = await browseRequest(`music/content/${encodeURIComponent(id)}`, "POST", {});
     if (result.error) return result.error;
-    const streamUrl = findMusicString(result.payload, (value) => value.includes(".m3u8"));
+    const playResult = await musicUpstream(
+      env,
+      auth,
+      `content/${encodeURIComponent(id)}/play?format=m3u8`,
+      "GET",
+      null,
+      true,
+      { redirect: "manual" }
+    );
+    if (playResult.error) return playResult.error;
+    const streamUrl = playResult.location ||
+      findMusicString(playResult.payload, (value) => value.includes(".m3u8")) ||
+      findMusicString(result.payload, (value) => value.includes(".m3u8"));
     if (!streamUrl) return json({ error: "24six did not return a stream URL", upstreamStatus: 200 }, 502);
     const tile = musicTiles(result.payload).find((item) => String(item.id) === id) || musicTiles(result.payload)[0];
     const stream = {
