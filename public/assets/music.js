@@ -24,6 +24,7 @@
   let playerPlaying = false;
   let shofarInterrupted = false;
   let shofarActive = false;
+  let musicViewActive = false;
   let retryUsed = false;
   let pollTimer = 0;
   let hlsLoading = null;
@@ -34,6 +35,7 @@
       pause: '<path d="M8 5v14M16 5v14"/>',
       next: '<path d="M5 5v14l11-7z"/><path d="M19 5v14"/>',
       prev: '<path d="M19 5v14L8 12z"/><path d="M5 5v14"/>',
+      back: '<path d="m15 18-6-6 6-6"/>',
       note: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>'
     };
     return `<svg class="music-chip__icon" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]}</svg>`;
@@ -107,7 +109,7 @@
 
   function renderChip() {
     const tracks = queue();
-    chip.hidden = tracks.length === 0;
+    chip.hidden = tracks.length === 0 || musicViewActive;
     const track = currentTrack() || tracks[Number(musicState?.index) || 0];
     chip.querySelector(".music-chip__title").textContent = track?.title || "24six";
     chip.querySelector(".music-chip__artist").textContent = track?.artist || "";
@@ -535,6 +537,14 @@
     return musicIcon(name).replace('class="music-chip__icon"', 'class="music-view-icon"');
   }
 
+  function musicViewDuration(value) {
+    const formatted = String(value ?? "").trim();
+    if (/^\d{1,3}:\d{2}$/.test(formatted)) return formatted;
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds) || seconds < 0) return "";
+    return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
+  }
+
   function musicViewTile(tile, index) {
     const image = tile.img
       ? `<img src="${musicViewEscape(tile.img)}" alt="" draggable="false" loading="lazy">`
@@ -554,7 +564,10 @@
       : `<div class="music-view-art music-view-placeholder">${musicViewIcon("note")}</div>`;
     const nextTracks = tracks.slice(index + 1);
     const progress = audio.duration ? Math.round((audio.currentTime / audio.duration) * 100) : 0;
-    root.innerHTML = `<div class="music-view-now">${cover}<div class="music-view-copy"><small>NOW PLAYING</small><h1>${musicViewEscape(track.title || "Choose something to play")}</h1><p>${musicViewEscape(track.artist || track.subtitle || "")}</p></div><input class="music-view-progress" data-music-seek type="range" min="0" max="100" value="${progress}" aria-label="Track progress"><div class="music-view-controls"><button type="button" data-player-action="prev" aria-label="Previous">${musicViewIcon("prev")}</button><button type="button" data-player-action="toggle" aria-label="Play or pause">${musicViewIcon(playerPlaying ? "pause" : "play")}</button><button type="button" data-player-action="next" aria-label="Next">${musicViewIcon("next")}</button></div><label class="music-view-volume">Volume<input type="range" data-player-volume min="0" max="100" value="${Number(musicState?.volume ?? 70)}" aria-label="Volume"></label><h2>Up next</h2><div class="music-view-upnext">${nextTracks.length ? nextTracks.map((item, nextIndex) => `<button type="button" data-player-queue="${index + nextIndex + 1}">${musicViewEscape(item.title || "Untitled")}<small>${musicViewEscape(item.artist || "")}</small></button>`).join("") : `<p>${tracks.length ? "End of queue" : "Your queue will appear here."}</p>`}</div>${playbackError ? `<p class="music-view-error">${musicViewEscape(playbackError)}</p>` : ""}</div>`;
+    const queuedTracks = nextTracks.length
+      ? nextTracks.map((item, nextIndex) => `<button type="button" data-player-queue="${index + nextIndex + 1}">${musicViewEscape(item.title || "Untitled")}<small>${musicViewEscape(item.artist || "")}</small></button>`).join("")
+      : `<p>${tracks.length ? "End of queue" : "Your queue will appear here."}</p>`;
+    root.innerHTML = `<div class="music-view-now">${cover}<div class="music-view-copy"><small>NOW PLAYING</small><h1>${musicViewEscape(track.title || "Choose something to play")}</h1><p>${musicViewEscape(track.artist || track.subtitle || "")}</p></div></div><input class="music-view-progress" data-music-seek type="range" min="0" max="100" value="${progress}" aria-label="Track progress"><div class="music-view-controls"><button type="button" data-player-action="prev" aria-label="Previous">${musicViewIcon("prev")}</button><button type="button" data-player-action="toggle" aria-label="Play or pause">${musicViewIcon(playerPlaying ? "pause" : "play")}</button><button type="button" data-player-action="next" aria-label="Next">${musicViewIcon("next")}</button></div><label class="music-view-volume">Volume<input type="range" data-player-volume min="0" max="100" value="${Number(musicState?.volume ?? 70)}" aria-label="Volume"></label><section class="music-view-queue"><h2>Up next</h2><div class="music-view-upnext">${queuedTracks}</div></section>${playbackError ? `<p class="music-view-error">${musicViewEscape(playbackError)}</p>` : ""}`;
   }
 
   function renderMusicBrowser() {
@@ -568,7 +581,13 @@
     if (musicViewState.detail) {
       const detail = musicViewState.detail;
       const tracks = detail.tiles || [];
-      content = `<button type="button" class="music-view-back" data-view-back>‹ Back</button><h2>${musicViewEscape(detail.title || "Music")}</h2><button type="button" class="music-view-play-all" data-view-play-all>Play all</button><div class="music-view-tracklist">${tracks.map((track, index) => `<button type="button" data-view-detail-track="${index}"><span>${index + 1}</span><strong>${musicViewEscape(track.title || "Untitled")}</strong><small>${musicViewEscape(track.subtitle || "")}</small>${musicViewIcon("play")}</button>`).join("")}</div>`;
+      const playableTracks = tracks.filter((track) => track.kind === "track");
+      content = `<div class="music-view-detail-heading"><button type="button" class="music-view-back" data-view-back>${musicViewIcon("back")}<span>Back</span></button><h2>${musicViewEscape(detail.title || "Music")}</h2><button type="button" class="music-view-play-all" data-view-play-all>Play all</button></div><div class="music-view-tracklist">${playableTracks.map((track, index) => {
+        const cover = track.img
+          ? `<img class="music-view-track-cover" src="${musicViewEscape(track.img)}" alt="" draggable="false">`
+          : `<span class="music-view-track-cover music-view-track-cover--empty">${musicViewIcon("note")}</span>`;
+        return `<button type="button" data-view-detail-track="${index}" aria-label="Play ${musicViewEscape(track.title || "Untitled")}"><span class="music-view-track-number">${index + 1}</span>${cover}<span class="music-view-track-copy"><strong>${musicViewEscape(track.title || "Untitled")}</strong><small>${musicViewEscape(track.subtitle || "")}</small></span><span class="music-view-duration">${musicViewDuration(track.length)}</span><span class="music-view-track-play">${musicViewIcon("play")}</span></button>`;
+      }).join("")}</div>`;
     } else if (musicViewState.tab === "home" && musicViewState.sections.length) {
       content += musicViewState.sections.map((section) => `<section class="music-view-shelf"><h2>${musicViewEscape(section.title)}</h2><div class="music-view-grid">${(section.tiles || []).map(musicViewTile).join("")}</div></section>`).join("");
     } else {
@@ -741,6 +760,8 @@
   if (typeof window.App?.register === "function") {
     window.App.register("music", {
       show: (element) => {
+        musicViewActive = true;
+        renderChip();
         if (element.dataset.musicBuilt !== "true") buildMusicView(element);
         else {
           musicViewState.root = element;
@@ -748,8 +769,15 @@
           renderMusicBrowser();
         }
       },
-      resume: () => renderMusicPlayer(),
-      hide: () => {}
+      resume: () => {
+        musicViewActive = true;
+        renderChip();
+        renderMusicPlayer();
+      },
+      hide: () => {
+        musicViewActive = false;
+        renderChip();
+      }
     });
     window.App.on("data", () => {
       const root = document.getElementById("view-music");

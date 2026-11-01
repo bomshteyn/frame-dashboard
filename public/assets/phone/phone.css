@@ -635,11 +635,23 @@ body {
   --phone-ink: #282a25;
   --phone-card: #fffefa;
   --phone-line: rgba(40, 42, 37, 0.08);
+  --sans: "Archivo", "Roboto", system-ui, sans-serif;
+  --serif: "Instrument Serif", "Noto Serif", Georgia, serif;
 }
 html,
 body {
   overflow-x: hidden;
   background: var(--phone-paper);
+}
+body {
+  font-family: var(--sans);
+}
+button,
+input,
+select,
+textarea {
+  color: inherit;
+  font: inherit;
 }
 .m-app {
   --accent: #e0457b;
@@ -650,7 +662,7 @@ body {
   width: 100%;
   max-width: 600px;
   min-height: 100vh;
-  padding: 0 0 calc(108px + env(safe-area-inset-bottom, 0px));
+  padding: 0;
   overflow-x: clip;
   color: var(--phone-ink);
   background: var(--phone-paper);
@@ -679,6 +691,9 @@ body {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
+.m-app {
+  font-family: var(--sans);
+}
 .m-app button:focus-visible,
 .m-app a:focus-visible,
 .m-app input:focus-visible,
@@ -692,6 +707,8 @@ body {
   top: 0;
   padding: 12px 20px 10px;
   border: 0;
+  border-bottom: 0;
+  box-shadow: none;
   background: rgba(245, 241, 232, 0.9);
   -webkit-backdrop-filter: blur(18px);
   backdrop-filter: blur(18px);
@@ -713,6 +730,16 @@ body {
   line-height: 1.08;
   font-weight: 400;
 }
+.m-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.m-title-meta {
+  color: #73746c;
+  font-size: 14px;
+  font-weight: 500;
+}
 .m-back,
 .m-sheet-close {
   min-width: 44px;
@@ -726,7 +753,7 @@ body {
   width: 100%;
   max-width: 600px;
   box-sizing: border-box;
-  padding: 14px 18px 30px;
+  padding: 14px 18px calc(72px + 10px + env(safe-area-inset-bottom, 0px) + 16px);
 }
 .m-banner {
   margin: 10px 18px 0;
@@ -1651,4 +1678,138 @@ body {
   width: 100%;
   min-height: 48px;
   margin-top: 12px;
+}
+.m-shopping-context {
+  margin: 0 1px 12px;
+}
+.m-status-dot {
+  background: #8b8d86;
+}
+.m-status-dot.is-online {
+  background: #35a66a;
+}
+.m-frame-status {
+  min-height: 0;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 13px;
+}
+.m-frame-segment button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+.m-inline-icon {
+  display: block;
+  flex: 0 0 auto;
+}
+.m-frame-icon .m-inline-icon {
+  width: 22px;
+  height: 22px;
+}
+.m-setting-icon .m-inline-icon {
+  width: 20px;
+  height: 20px;
+}
+.m-row-trailing {
+  font-size: 0;
+}
+.m-row-trailing [data-hidden-count] {
+  font-size: 12px;
+}
+.m-row-trailing .m-inline-icon {
+  width: 16px;
+  height: 16px;
+}
+.m-done-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 44px;
+  margin: 8px 0 0;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: #73746c;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+}
+.m-pin-display {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin: 14px 0;
+  letter-spacing: 0;
+  font-size: 0;
+}
+.m-pin-dot {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--accent);
+  border-radius: 50%;
+  background: transparent;
+}
+.m-pin-dot.is-filled {
+  background: var(--accent);
+}
+.m-pin-pad button {
+  font-family: var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+.m-music-mark .m-inline-icon {
+  width: 28px;
+  height: 28px;
+}
+.m-music-controls button,
+.m-music-controls .m-music-play {
+  display: grid;
+  place-items: center;
+}
+.m-music-controls .m-inline-icon {
+  width: 22px;
+  height: 22px;
+}
+.m-music-controls .m-music-play .m-inline-icon {
+  width: 24px;
+  height: 24px;
+}
+.m-music-list-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 9px;
+}
+.m-music-list-head .m-back {
+  display: flex;
+  min-width: 72px;
+  min-height: 56px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 8px;
+}
+.m-music-list-head h2 {
+  font-family: var(--sans);
+}
+.m-music-play-all {
+  min-height: 56px;
+}
+.m-music-track > .m-inline-icon {
+  width: 18px;
+  height: 18px;
+}
+.m-music-cover-placeholder .m-inline-icon {
+  width: 28px;
+  height: 28px;
+}
+.m-app input[type="range"] {
+  accent-color: var(--accent);
 }

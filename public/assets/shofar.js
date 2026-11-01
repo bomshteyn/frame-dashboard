@@ -82,11 +82,15 @@
 
     css(
       ".m-shofar-controls{display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--card);border-radius:16px;margin:12px 0;padding:14px}" +
-      ".m-shofar-toggle{display:flex;align-items:center;gap:10px;font-weight:600}" +
-      ".m-shofar-toggle input{width:20px;height:20px;accent-color:var(--ink,#1d1d1b)}" +
+      ".m-shofar-toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:1;font-weight:600}" +
+      ".m-shofar-switch{position:relative;display:block;width:56px;height:44px;flex:0 0 56px;padding:0;border:0;border-radius:999px;background:#c9c8c1;color:#fff;cursor:pointer}" +
+      ".m-shofar-switch[aria-checked=true]{background:var(--accent)}" +
+      ".m-shofar-switch:after{content:'';position:absolute;top:8px;left:4px;width:28px;height:28px;border-radius:50%;background:#fff;box-shadow:0 1px 3px #0003;transition:transform .16s ease}" +
+      ".m-shofar-switch[aria-checked=true]:after{transform:translateX(20px)}" +
+      ".m-shofar-switch:focus-visible{outline:2px solid var(--accent);outline-offset:2px}" +
       ".m-shofar-volume{display:flex;flex-direction:column;gap:8px;background:var(--card);border-radius:16px;margin:0 0 12px;padding:14px}" +
       ".m-shofar-volume span{display:flex;justify-content:space-between;gap:10px}" +
-      ".m-shofar-volume input{width:100%;accent-color:var(--ink,#1d1d1b)}" +
+      ".m-shofar-volume input{width:100%;accent-color:var(--accent)}" +
       ".m-shofar-status{margin:10px 0}"
     );
 
@@ -114,7 +118,7 @@
       var disabled = locked || !loaded || !windowsLoaded || saving;
       return '<p class="m-muted">Plays on the frames 15 minutes before candle lighting and at candle lighting. Silent when Shabbat or Yom Tov starts during Yom Tov.</p>' +
         (locked ? '<p class="m-muted">Settings are locked during Shabbat/Yom Tov</p>' : "") +
-        '<div class="m-shofar-controls"><label class="m-shofar-toggle"><input type="checkbox" data-write data-shofar-on' + (setting.on ? " checked" : "") + (disabled ? " disabled" : "") + '>On</label>' +
+        '<div class="m-shofar-controls"><div class="m-shofar-toggle"><span>Shofar alerts</span><button type="button" class="m-shofar-switch" role="switch" aria-label="Shofar alerts" aria-checked="' + setting.on + '" data-write data-shofar-on' + (disabled ? " disabled" : "") + '></button></div>' +
         '<button type="button" class="m-mini" data-write data-shofar-test' + (disabled ? " disabled" : "") + '>Test on frames</button></div>' +
         '<label class="m-shofar-volume"><span>Volume <b>' + setting.volume + '</b></span><input type="range" min="0" max="100" value="' + setting.volume + '" data-write data-shofar-volume' + (disabled ? " disabled" : "") + '></label>' +
         (feedback ? '<p class="m-muted m-shofar-status">' + esc(feedback) + "</p>" : "") +
@@ -206,13 +210,16 @@
 
     document.addEventListener("change", function (event) {
       var target = event.target;
-      if (target.matches && target.matches("[data-shofar-on]")) {
-        save({ on: target.checked });
-      } else if (target.matches && target.matches("[data-shofar-volume]")) {
+      if (target.matches && target.matches("[data-shofar-volume]")) {
         save({ volume: Number(target.value) });
       }
     });
     document.addEventListener("click", function (event) {
+      var toggle = event.target.closest && event.target.closest("[data-shofar-on]");
+      if (toggle && !toggle.disabled) {
+        save({ on: toggle.getAttribute("aria-checked") !== "true" });
+        return;
+      }
       var button = event.target.closest && event.target.closest("[data-shofar-test]");
       if (!button || button.disabled) return;
       save(function (current) {
@@ -230,8 +237,27 @@
 
     window.HQShofar.phoneHtml = section;
     window.HQShofar.phoneStatus = function () {
-      if (!loaded) return "Loading settings…";
-      return setting.on ? "On" : "Off";
+      if (!loadAttempted) loadSetting();
+      if (!windowsLoaded && !windowsLoading) loadWindows();
+      if (!loaded) return loadError ? "Settings unavailable" : "Loading settings…";
+      if (!setting.on) return "Off";
+      var upcoming = windows.filter(function (window) {
+        return new Date(window && window.start).getTime() > Date.now();
+      }).sort(function (left, right) {
+        return new Date(left.start).getTime() - new Date(right.start).getTime();
+      })[0];
+      if (!upcoming) return "On";
+      var start = new Date(upcoming.start);
+      var day = new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/Toronto",
+        weekday: "short"
+      }).format(start);
+      var time = new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/Toronto",
+        hour: "numeric",
+        minute: "2-digit"
+      }).format(start);
+      return "On · " + day + " " + time;
     };
   }
 

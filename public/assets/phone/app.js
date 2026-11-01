@@ -66,6 +66,33 @@ import {
     var element = document.createElement(`span`);
     return ((element.textContent = String(value ?? ``)), element.innerHTML);
   }
+  function phoneIcon(name, size) {
+    var paths = {
+      home: `<path d="m3 10 9-7 9 7"/><path d="M5 9v11h14V9"/><path d="M9 20v-6h6v6"/>`,
+      calendar: `<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>`,
+      tasks: `<rect x="3" y="3" width="18" height="18" rx="4"/><path d="m7 12 3 3 7-7"/>`,
+      cart: `<path d="M3 4h2l2.5 11h11L21 8H6"/><circle cx="10" cy="19" r="1.5"/><circle cx="17" cy="19" r="1.5"/>`,
+      photo: `<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-8 8"/>`,
+      sun: `<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>`,
+      moon: `<path d="M20 14.5A8.2 8.2 0 0 1 9.5 4 8.2 8.2 0 1 0 20 14.5z"/>`,
+      "skip-forward": `<path d="M5 5v14l11-7z"/><path d="M19 5v14"/>`,
+      "skip-back": `<path d="M19 5v14L8 12z"/><path d="M5 5v14"/>`,
+      "eye-off": `<path d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8"/><path d="M9.9 5.2A10.8 10.8 0 0 1 12 5c5 0 8.5 4.5 9.5 7-.4 1-1.2 2.2-2.3 3.3M6.2 6.2C3.9 7.7 2.7 10 2.5 12c.7 1.8 2 3.5 3.8 4.8A10 10 0 0 0 12 19"/>`,
+      users: `<path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="10" cy="7" r="4"/><path d="M20 21v-2a4 4 0 0 0-3-3.9M16 3.2a4 4 0 0 1 0 7.6"/>`,
+      bell: `<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/>`,
+      refresh: `<path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.5 9A7 7 0 0 1 18 6l2 6M4 12l2 6a7 7 0 0 0 12.5-3"/>`,
+      music: `<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>`,
+      play: `<path d="m8 5 12 7-12 7z"/>`,
+      pause: `<path d="M8 5v14M16 5v14"/>`,
+      "delete-left": `<path d="M21 5H9l-6 7 6 7h12z"/><path d="m12 9 6 6m0-6-6 6"/>`,
+      back: `<path d="m15 18-6-6 6-6"/>`,
+      chevron: `<path d="m9 18 6-6-6-6"/>`,
+      "chevron-down": `<path d="m6 9 6 6 6-6"/>`,
+      "chevron-up": `<path d="m6 15 6-6 6 6"/>`,
+    };
+    size = size || 20;
+    return `<svg class="m-inline-icon" viewBox="0 0 24 24" width="` + size + `" height="` + size + `" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` + (paths[name] || ``) + `</svg>`;
+  }
   function createId(prefix) {
     return (
       prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
@@ -187,11 +214,11 @@ import {
   function isWriteDisabled(element) {
     return !!(viewState.kodesh && element && element.closest(`[data-write]`));
   }
-  function renderHeader(title, showBackButton) {
+  function renderHeader(title, showBackButton, titleMeta) {
     return (
-      `<header class="m-header"><div class="m-header-row"><div><div class="m-brand">Home HQ</div><h1 class="m-title serif">` +
+      `<header class="m-header"><div class="m-header-row"><div><div class="m-brand">Home HQ</div><div class="m-title-row"><h1 class="m-title serif">` +
       escapeHTML(title) +
-      `</h1></div>` +
+      `</h1>` + (titleMeta ? `<span class="m-title-meta">` + escapeHTML(titleMeta) + `</span>` : ``) + `</div></div>` +
       (showBackButton
         ? `<button type="button" class="m-back" data-action="back">Back</button>`
         : ``) +
@@ -327,7 +354,7 @@ import {
   }
   function renderShopping() {
     return (
-      `<div class="m-section-heading"><h2 class="serif">Shopping</h2><span class="m-muted">Shared list</span></div><div class="m-store-grid">` +
+      `<p class="m-muted m-shopping-context">Shared list</p><div class="m-store-grid">` +
       getStores()
         .map(function (item) {
           var value = countOpenGroceries(item.id);
@@ -515,7 +542,7 @@ import {
       `</div>` +
       (items.length
         ? value
-        : `<div class="m-empty serif">Nothing left to buy.</div>`) +
+        : `<div class="m-empty">Nothing left to buy.</div>`) +
       (viewState.shopMode && items3.length
         ? `<div class="m-done-bar">` +
           renderButton(
@@ -654,9 +681,7 @@ import {
           return (right.doneAt || ``).localeCompare(left.doneAt || ``);
         });
     return (
-      `<div class="m-section-heading"><h2 class="serif">Family tasks</h2><span class="m-muted">` +
-      value.length +
-      ` open</span></div><form class="m-form" data-form="task"><input class="m-input" name="task" aria-label="Add a task" placeholder="Add a task…" autocomplete="off" value="` +
+      `<form class="m-form" data-form="task"><input class="m-input" name="task" aria-label="Add a task" placeholder="Add a task…" autocomplete="off" value="` +
       escapeHTML(viewState.query) +
       `"` +
       (viewState.kodesh ? ` disabled` : ``) +
@@ -669,13 +694,11 @@ import {
       `</div></div><div class="m-tasks">` +
       (value.length
         ? renderTaskItems(value, !1)
-        : `<div class="m-empty serif">Nothing to do right now.</div>`) +
+        : `<div class="m-empty">Nothing to do right now.</div>`) +
       `</div>` +
       (value2.length
-        ? `<button type="button" class="m-done-toggle" data-action="toggle-done">Done · ` +
-          value2.length +
-          ` ` +
-          (viewState.doneOpen ? `· Hide` : `· Show`) +
+        ? `<button type="button" class="m-done-toggle" data-action="toggle-done" aria-expanded="` + viewState.doneOpen + `">` +
+          (viewState.doneOpen ? `Hide done` : `Show ` + value2.length + ` done`) + phoneIcon(viewState.doneOpen ? `chevron-up` : `chevron-down`, 16) +
           `</button>` +
           (viewState.doneOpen
             ? `<div class="m-tasks">` +
@@ -752,7 +775,7 @@ import {
       subtitle = escapeHTML(tile.subtitle || ``),
       image = tile.img
         ? `<img src="` + escapeHTML(tile.img) + `" alt="" loading="lazy">`
-        : `<span class="m-music-cover-placeholder">♪</span>`;
+        : `<span class="m-music-cover-placeholder">` + phoneIcon(`music`, 28) + `</span>`;
     return tile.kind === `track`
       ? `<button type="button" class="m-music-tile" data-write data-music-track="` + id + `" data-title="` + title + `" data-artist="` + subtitle + `" data-img="` + escapeHTML(tile.img || ``) + `"` + (viewState.kodesh ? ` disabled` : ``) + `>` + image + `<span><strong>` + title + `</strong><small>` + subtitle + `</small></span></button>`
       : `<button type="button" class="m-music-tile" data-music-open="` + id + `" data-music-kind="` + escapeHTML(tile.kind || `playlist`) + `" data-title="` + title + `">` + image + `<span><strong>` + title + `</strong><small>` + subtitle + `</small></span></button>`;
@@ -771,14 +794,14 @@ import {
       img = current.img || state.img || ``,
       disabled = viewState.kodesh ? ` disabled` : ``;
     return `<section class="m-music-now"><div class="m-music-now-art">` +
-      (img ? `<img src="` + escapeHTML(img) + `" alt="">` : `<span>♪</span>`) +
-      `</div><div class="m-music-now-copy"><small>NOW PLAYING</small><strong>` + escapeHTML(title) + `</strong><span>` + escapeHTML(artist) + `</span></div><div class="m-music-controls"><button type="button" data-write data-music-action="prev" aria-label="Previous track"` + disabled + `>‹</button><button type="button" class="m-music-play" data-write data-music-action="toggle" aria-label="Play or pause"` + disabled + `>` + (command.playing ? `Ⅱ` : `▶`) + `</button><button type="button" data-write data-music-action="next" aria-label="Next track"` + disabled + `>›</button></div><div class="m-music-target" role="group" aria-label="Play on"><button type="button" data-write data-music-target="small" class="` + (viewState.musicTarget === `small` ? `is-on` : ``) + `"` + disabled + `>10″</button><button type="button" data-write data-music-target="large" class="` + (viewState.musicTarget === `large` ? `is-on` : ``) + `"` + disabled + `>15″</button><button type="button" data-write data-music-target="both" class="` + (viewState.musicTarget === `both` ? `is-on` : ``) + `"` + disabled + `>Both</button></div><label class="m-music-volume"><span>Volume</span><input type="range" min="0" max="100" value="` + Number(viewState.musicVolume) + `" data-write data-music-volume aria-label="Volume"` + disabled + `></label></section>`;
+      (img ? `<img src="` + escapeHTML(img) + `" alt="">` : phoneIcon(`music`, 30)) +
+      `</div><div class="m-music-now-copy"><small>NOW PLAYING</small><strong>` + escapeHTML(title) + `</strong><span>` + escapeHTML(artist) + `</span></div><div class="m-music-controls"><button type="button" data-write data-music-action="prev" aria-label="Previous track"` + disabled + `>` + phoneIcon(`skip-back`) + `</button><button type="button" class="m-music-play" data-write data-music-action="toggle" aria-label="Play or pause"` + disabled + `>` + phoneIcon(command.playing ? `pause` : `play`) + `</button><button type="button" data-write data-music-action="next" aria-label="Next track"` + disabled + `>` + phoneIcon(`skip-forward`) + `</button></div><div class="m-music-target" role="group" aria-label="Play on"><button type="button" data-write data-music-target="small" class="` + (viewState.musicTarget === `small` ? `is-on` : ``) + `"` + disabled + `>10″</button><button type="button" data-write data-music-target="large" class="` + (viewState.musicTarget === `large` ? `is-on` : ``) + `"` + disabled + `>15″</button><button type="button" data-write data-music-target="both" class="` + (viewState.musicTarget === `both` ? `is-on` : ``) + `"` + disabled + `>Both</button></div><label class="m-music-volume"><span>Volume</span><input type="range" min="0" max="100" value="` + Number(viewState.musicVolume) + `" data-write data-music-volume aria-label="Volume"` + disabled + `></label></section>`;
   }
   function renderMusicList() {
     var list = viewState.musicList;
     if (!list) return ``;
-    return `<div class="m-music-list-head"><button type="button" class="m-back" data-music-action="back">‹ Back</button><h2 class="serif">` + escapeHTML(list.title) + `</h2></div><button type="button" class="m-btn m-btn--solid m-music-play-all" data-write data-music-action="play-all"` + (viewState.kodesh ? ` disabled` : ``) + `>Play all</button><div class="m-music-track-list">` + (list.tiles || []).map(function (tile, index) {
-      return `<button type="button" class="m-music-track" data-write data-music-track-index="` + index + `"` + (viewState.kodesh ? ` disabled` : ``) + `><span class="m-track-number">` + (index + 1) + `</span><span><strong>` + escapeHTML(tile.title) + `</strong><small>` + escapeHTML(tile.subtitle || ``) + `</small></span><span aria-hidden="true">▶</span></button>`;
+    return `<div class="m-music-list-head"><button type="button" class="m-back" data-music-action="back">` + phoneIcon(`back`, 18) + `<span>Back</span></button><h2 class="serif">` + escapeHTML(list.title) + `</h2></div><button type="button" class="m-btn m-btn--solid m-music-play-all" data-write data-music-action="play-all"` + (viewState.kodesh ? ` disabled` : ``) + `>Play all</button><div class="m-music-track-list">` + (list.tiles || []).map(function (tile, index) {
+      return `<button type="button" class="m-music-track" data-write data-music-track-index="` + index + `"` + (viewState.kodesh ? ` disabled` : ``) + `><span class="m-track-number">` + (index + 1) + `</span><span><strong>` + escapeHTML(tile.title) + `</strong><small>` + escapeHTML(tile.subtitle || ``) + `</small></span>` + phoneIcon(`play`, 18) + `</button>`;
     }).join(``) + `</div>`;
   }
   function renderMusicQueue() {
@@ -786,7 +809,7 @@ import {
       queue = Array.isArray(command.queue) ? command.queue : [];
     if (!queue.length) return ``;
     return `<section class="m-music-queue"><div class="m-shelf-heading"><h2>Up next</h2><span>` + queue.length + ` tracks</span></div>` + queue.map(function (track, index) {
-      return `<button type="button" class="m-music-track` + (index === Number(command.index) ? ` is-current` : ``) + `" data-write data-music-queue-index="` + index + `"` + (viewState.kodesh ? ` disabled` : ``) + `><span class="m-track-number">` + (index === Number(command.index) ? `♪` : index + 1) + `</span><span><strong>` + escapeHTML(track.title || `Untitled`) + `</strong><small>` + escapeHTML(track.artist || ``) + `</small></span><span aria-hidden="true">›</span></button>`;
+      return `<button type="button" class="m-music-track` + (index === Number(command.index) ? ` is-current` : ``) + `" data-write data-music-queue-index="` + index + `"` + (viewState.kodesh ? ` disabled` : ``) + `><span class="m-track-number">` + (index === Number(command.index) ? phoneIcon(`music`, 16) : index + 1) + `</span><span><strong>` + escapeHTML(track.title || `Untitled`) + `</strong><small>` + escapeHTML(track.artist || ``) + `</small></span>` + phoneIcon(`chevron`, 16) + `</button>`;
     }).join(``) + `</section>`;
   }
   function loadMusicBrowse(tab, page) {
@@ -824,7 +847,7 @@ import {
   }
   function renderMusic() {
     if (viewState.musicConnected === null) return `<div class="m-empty">Loading 24six…</div>`;
-    if (!viewState.musicConnected) return `<section class="m-music-connect-card"><span class="m-music-mark">♪</span><h2 class="serif">Music for home</h2><p class="m-muted">Connect your 24six account to browse and play on your frames.</p><button type="button" class="m-btn m-btn--solid" data-write data-music-action="connect"` + (viewState.kodesh ? ` disabled` : ``) + `>Connect 24six</button>` + (viewState.musicError ? `<p class="m-music-error">` + escapeHTML(viewState.musicError) + `</p>` : ``) + `</section>`;
+    if (!viewState.musicConnected) return `<section class="m-music-connect-card"><span class="m-music-mark">` + phoneIcon(`music`, 28) + `</span><h2 class="serif">Music for home</h2><p class="m-muted">Connect your 24six account to browse and play on your frames.</p><button type="button" class="m-btn m-btn--solid" data-write data-music-action="connect"` + (viewState.kodesh ? ` disabled` : ``) + `>Connect 24six</button>` + (viewState.musicError ? `<p class="m-music-error">` + escapeHTML(viewState.musicError) + `</p>` : ``) + `</section>`;
     if (viewState.musicList) return renderMusicList();
     return renderMusicNowCard() +
       renderMusicQueue() +
@@ -844,8 +867,8 @@ import {
     if (viewState.musicStep === `profiles`) return error + `<p class="m-muted">Choose a profile</p><div class="m-profile-grid">` + viewState.musicProfiles.map(function (profile) {
       return `<button type="button" class="m-profile-card" data-write data-profile-id="` + escapeHTML(profile.id) + `"` + (viewState.kodesh ? ` disabled` : ``) + `>` + (profile.img ? `<img src="` + escapeHTML(profile.img) + `" alt="">` : `<span class="m-profile-avatar">` + escapeHTML((profile.name || `?`).charAt(0)) + `</span>`) + `<strong>` + escapeHTML(profile.name || `Profile`) + `</strong><small>` + (profile.pin_required ? `PIN required` : `No PIN`) + `</small></button>`;
     }).join(``) + `</div>`;
-    if (viewState.musicStep === `pin`) return error + `<p class="m-muted">Enter the 4-digit PIN for <strong>` + escapeHTML(viewState.musicProfile && viewState.musicProfile.name || `this profile`) + `</strong></p><div class="m-pin-display" aria-label="PIN">` + `● `.repeat(viewState.musicPin.length) + `○ `.repeat(4 - viewState.musicPin.length) + `</div><div class="m-pin-pad">` + [`1`,`2`,`3`,`4`,`5`,`6`,`7`,`8`,`9`,`back`,`0`,`clear`].map(function (digit) {
-      return `<button type="button" data-write data-pin-digit="` + digit + `"` + (viewState.kodesh ? ` disabled` : ``) + `>` + (digit === `back` ? `⌫` : digit === `clear` ? `Clear` : digit) + `</button>`;
+    if (viewState.musicStep === `pin`) return error + `<p class="m-muted">Enter the 4-digit PIN for <strong>` + escapeHTML(viewState.musicProfile && viewState.musicProfile.name || `this profile`) + `</strong></p><div class="m-pin-display" role="img" aria-label="` + viewState.musicPin.length + ` of 4 PIN digits entered">` + Array.from({ length: 4 }, function (_, index) { return `<span class="m-pin-dot` + (index < viewState.musicPin.length ? ` is-filled` : ``) + `"></span>`; }).join(``) + `</div><div class="m-pin-pad">` + [`1`,`2`,`3`,`4`,`5`,`6`,`7`,`8`,`9`,`back`,`0`,`clear`].map(function (digit) {
+      return `<button type="button" data-write data-pin-digit="` + digit + `"` + (viewState.kodesh ? ` disabled` : ``) + `>` + (digit === `back` ? phoneIcon(`delete-left`, 18) : digit === `clear` ? `Clear` : digit) + `</button>`;
     }).join(``) + `</div>`;
     return error + `<form class="m-music-credentials" data-form="music-credentials"><label>Email<input class="m-input" data-write name="musicEmail" type="email" autocomplete="username" required value="` + escapeHTML(viewState.musicEmail) + `"` + (viewState.kodesh ? ` disabled` : ``) + `></label><label>Password<input class="m-input" data-write name="musicPassword" type="password" autocomplete="current-password" required` + (viewState.kodesh ? ` disabled` : ``) + `></label><button type="submit" data-write class="m-btn m-btn--solid"` + (viewState.kodesh ? ` disabled` : ``) + `>Continue</button></form>`;
   }
@@ -914,39 +937,38 @@ import {
       img: button.dataset.img || ``,
     };
   }
-  function frameLastSeenText() {
-    if (!viewState.heartbeat) return `Frame has not checked in yet`;
-    var value = Math.max(
-        0,
-        Math.floor((Date.now() - viewState.heartbeat) / 1e3),
-      ),
-      value2 = mobileData.heartbeat && mobileData.heartbeat.app,
-      value3 =
-        value2 && typeof value2.versionName == `string`
-          ? ` · App ` +
-            value2.versionName +
-            ` · auto-updates ` +
-            (value2.deviceOwner ? `on` : `off`)
-          : ``;
-    return `Frame last seen ` + value + `s ago` + value3;
+  function frameHeartbeatStatus() {
+    var timestamp = typeof viewState.heartbeat === `number`
+      ? viewState.heartbeat
+      : new Date(viewState.heartbeat).getTime();
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return { online: !1, text: `Offline · never seen` };
+    if (timestamp < 1e12) timestamp *= 1000;
+    var seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+    var age = seconds < 60 ? seconds + `s ago`
+      : seconds < 3600 ? Math.floor(seconds / 60) + ` min ago`
+        : seconds < 86400 ? Math.floor(seconds / 3600) + ` h ago`
+          : Math.floor(seconds / 86400) + ` d ago`;
+    var online = seconds < 120;
+    return { online: online, text: (online ? `Online · seen ` : `Offline · last seen `) + age };
   }
   function renderFrame() {
+    var status = frameHeartbeatStatus();
     return (
-      `<div class="m-section-heading"><h2 class="serif">Frame</h2></div><div class="m-frame-status" data-frame-last-seen><span class="m-status-dot"></span>` +
-      escapeHTML(frameLastSeenText()) +
+      `<div class="m-frame-status" data-frame-last-seen><span class="m-status-dot` + (status.online ? ` is-online` : ``) + `"></span><span>` +
+      escapeHTML(status.text) +
       `</div><div class="m-frame-segment" role="group" aria-label="Screen power"><button type="button" data-remote="screenOn" data-write ` +
       (viewState.kodesh ? `disabled` : ``) +
-      `>Screen on</button><button type="button" data-remote="screenOff" data-write ` +
+      `>` + phoneIcon(`sun`, 18) + `Screen on</button><button type="button" data-remote="screenOff" data-write ` +
       (viewState.kodesh ? `disabled` : ``) +
-      `>Screen off</button></div><div class="m-frame-grid">` +
+      `>` + phoneIcon(`moon`, 18) + `Screen off</button></div><div class="m-frame-grid">` +
       [
-        [`Today`, `go`, `home`, `calendar`],
+        [`Today`, `go`, `home`, `home`],
         [`Calendar`, `go`, `calendar`, `calendar`],
         [`Tasks`, `go`, `tasks`, `tasks`],
         [`Shopping`, `go`, `shopping`, `cart`],
-        [`Photos`, `go`, `photos`, `photos`],
-        [`Weather`, `go`, `weather`, `weather`],
-        [`Next photo`, `nextPhoto`, ``, `next`],
+        [`Photos`, `go`, `photos`, `photo`],
+        [`Weather`, `go`, `weather`, `sun`],
+        [`Next photo`, `nextPhoto`, ``, `skip-forward`],
       ]
         .map(function (item) {
           return (
@@ -956,27 +978,27 @@ import {
             escapeHTML(item[2]) +
             `" data-write ` +
             (viewState.kodesh ? `disabled` : ``) +
-            `><span class="m-frame-icon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
-            (window.ICONS[item[3]] || ``) +
-            `</svg></span><span>` +
+            `><span class="m-frame-icon">` +
+            phoneIcon(item[3], 22) +
+            `</span><span>` +
             escapeHTML(item[0]) +
             `</span></button>`
           );
         })
         .join(``) +
-      `</div><div class="m-section-heading m-settings-heading"><h2 class="serif">Settings</h2></div><div class="m-settings-list">` +
-      `<button type="button" class="m-setting-row" data-open-sheet="hidden"><span class="m-setting-icon">◌</span><span><strong>Hidden photos</strong><small>Photos kept off the frame</small></span><b class="m-row-trailing"><span data-hidden-count>` +
+      `</div><div class="m-section-heading m-settings-heading"><h2>Settings</h2></div><div class="m-settings-list">` +
+      `<button type="button" class="m-setting-row" data-open-sheet="hidden"><span class="m-setting-icon">` + phoneIcon(`eye-off`) + `</span><span><strong>Hidden photos</strong><small>Photos kept off the frame</small></span><b class="m-row-trailing"><span data-hidden-count>` +
       String(window.HQHidden && window.HQHidden.count ? window.HQHidden.count() : 0) +
-      `</span><span aria-hidden="true">›</span></b></button><button type="button" class="m-setting-row" data-open-sheet="people"><span class="m-setting-icon">♙</span><span><strong>People</strong><small>Family names and assignments</small></span><b class="m-row-trailing">›</b></button><button type="button" class="m-setting-row" data-open-sheet="shofar"><span class="m-setting-icon">◖</span><span><strong>Shabbat shofar</strong><small>` +
+      `</span>` + phoneIcon(`chevron`, 16) + `</b></button><button type="button" class="m-setting-row" data-open-sheet="people"><span class="m-setting-icon">` + phoneIcon(`users`) + `</span><span><strong>People</strong><small>Family names and assignments</small></span><b class="m-row-trailing">` + phoneIcon(`chevron`, 16) + `</b></button><button type="button" class="m-setting-row" data-open-sheet="shofar"><span class="m-setting-icon">` + phoneIcon(`bell`) + `</span><span><strong>Shabbat shofar</strong><small>` +
       (window.HQShofar && window.HQShofar.phoneStatus ? escapeHTML(window.HQShofar.phoneStatus()) : `Alerts and frame volume`) +
-      `</small></span><b class="m-row-trailing">›</b></button><button type="button" class="m-setting-row" data-remote="reload" data-write ` +
+      `</small></span><b class="m-row-trailing">` + phoneIcon(`chevron`, 16) + `</b></button><button type="button" class="m-setting-row" data-remote="reload" data-write ` +
       (viewState.kodesh ? `disabled` : ``) +
-      `><span class="m-setting-icon">↻</span><span><strong>Reload frame</strong><small>Restart the frame app</small></span><b class="m-row-trailing">›</b></button></div>`
+      `><span class="m-setting-icon">` + phoneIcon(`refresh`) + `</span><span><strong>Reload frame</strong><small>Restart the frame app</small></span><b class="m-row-trailing">` + phoneIcon(`chevron`, 16) + `</b></button></div>`
     );
   }
   function renderPeople() {
     return (
-      `<section class="m-frame-people"><div class="m-section-heading"><h2 class="serif">People</h2></div>` +
+      `<section class="m-frame-people">` +
       window.CONFIG.people
         .filter(function (item) {
           return !item.shared && item.id !== `family`;
@@ -1004,7 +1026,7 @@ import {
   }
   function renderCurrentScreen() {
     return viewState.tab === `tasks`
-      ? renderHeader(`Tasks`) +
+      ? renderHeader(`Tasks`, !1, mobileData.tasks.filter(function (item) { return !item.done; }).length + ` open`) +
           `<main class="m-content">` +
           renderTasks() +
           `</main>`
