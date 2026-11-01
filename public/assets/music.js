@@ -25,6 +25,7 @@
   let shofarInterrupted = false;
   let shofarActive = false;
   let musicViewActive = false;
+  let chipDismissed = false;
   let retryUsed = false;
   let pollTimer = 0;
   let hlsLoading = null;
@@ -35,6 +36,7 @@
       pause: '<path d="M8 5v14M16 5v14"/>',
       next: '<path d="M5 5v14l11-7z"/><path d="M19 5v14"/>',
       prev: '<path d="M19 5v14L8 12z"/><path d="M5 5v14"/>',
+      close: '<path d="m18 6-12 12M6 6l12 12"/>',
       back: '<path d="m15 18-6-6 6-6"/>',
       note: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>'
     };
@@ -50,7 +52,8 @@
     `<span class="music-chip__placeholder" hidden>${musicIcon("note")}</span></div>` +
     '<div class="music-chip__details"><span class="music-chip__title"></span><span class="music-chip__artist"></span></div>' +
     `<button class="music-chip__button" type="button" data-music-toggle aria-label="Play">${musicIcon("play")}</button>` +
-    `<button class="music-chip__button" type="button" data-music-next aria-label="Next track">${musicIcon("next")}</button>`;
+    `<button class="music-chip__button" type="button" data-music-next aria-label="Next track">${musicIcon("next")}</button>` +
+    `<button class="music-chip__button music-chip__button--secondary" type="button" data-music-close aria-label="Close player">${musicIcon("close")}</button>`;
   stage.appendChild(chip);
 
   function safeStorageGet(key) {
@@ -109,7 +112,7 @@
 
   function renderChip() {
     const tracks = queue();
-    chip.hidden = tracks.length === 0 || musicViewActive;
+    chip.hidden = tracks.length === 0 || musicViewActive || chipDismissed;
     const track = currentTrack() || tracks[Number(musicState?.index) || 0];
     chip.querySelector(".music-chip__title").textContent = track?.title || "24six";
     chip.querySelector(".music-chip__artist").textContent = track?.artist || "";
@@ -140,7 +143,9 @@
   chip.addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (!button) return;
-    if (button.hasAttribute("data-music-next")) {
+    if (button.hasAttribute("data-music-close")) {
+      stopCurrentPlayback(true);
+    } else if (button.hasAttribute("data-music-next")) {
       advanceTrack(1, true);
     } else if (playerPlaying) {
       pausePlayback();
@@ -234,7 +239,14 @@
     reportNowPlaying();
   }
 
+  function stopCurrentPlayback(dismissChip = false) {
+    if (playerPlaying) logTrack(currentTrack(), Number(audio.currentTime) || 0);
+    if (dismissChip) chipDismissed = true;
+    stopPlayback();
+  }
+
   async function loadAndPlay(index, retry = false) {
+    chipDismissed = false;
     if (isKodeshActive()) {
       playbackError = "Playback is paused during Shabbat/Yom Tov";
       stopPlayback();
@@ -344,6 +356,7 @@
   }
 
   function resumePlayback() {
+    chipDismissed = false;
     if (isKodeshActive()) {
       playbackError = "Playback is paused during Shabbat/Yom Tov";
       stopPlayback();
@@ -367,6 +380,7 @@
 
   function advanceTrack(direction, logCurrent) {
     if (!queue().length) return;
+    chipDismissed = false;
     if (logCurrent) logTrack(currentTrack(), Number(audio.currentTime) || 0);
     loadAndPlay(activeIndex + direction);
   }
@@ -390,8 +404,7 @@
         advanceTrack(-1, true);
         break;
       case "stop":
-        if (playerPlaying) logTrack(currentTrack(), Number(audio.currentTime) || 0);
-        stopPlayback();
+        stopCurrentPlayback();
         break;
       case "volume":
         setVolume(argument ?? command.volume);

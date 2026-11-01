@@ -103,6 +103,17 @@
   outline-offset: 2px;
 }
 
+.music-chip__button--secondary {
+  color: var(--ink, #25231f);
+  background: transparent;
+  opacity: 0.58;
+}
+
+.music-chip__button--secondary:hover {
+  background: var(--paper-2);
+  opacity: 0.86;
+}
+
 #screenOff {
   z-index: 201;
 }
