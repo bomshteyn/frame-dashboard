@@ -37,6 +37,7 @@
       pause: '<path d="M8 5v14M16 5v14"/>',
       next: '<path d="M5 5v14l11-7z"/><path d="M19 5v14"/>',
       prev: '<path d="M19 5v14L8 12z"/><path d="M5 5v14"/>',
+      shuffle: '<path d="m18 14 4 4-4 4"/><path d="m18 2 4 4-4 4"/><path d="M2 18h2.5a5 5 0 0 0 4-2l7-10a5 5 0 0 1 4-2H22"/><path d="M2 6h2.5a5 5 0 0 1 4 2l7 10a5 5 0 0 0 4 2H22"/>',
       close: '<path d="m18 6-12 12M6 6l12 12"/>',
       back: '<path d="m15 18-6-6 6-6"/>',
       note: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>'
@@ -73,6 +74,17 @@
 
   function queue() {
     return playQueue;
+  }
+
+  function shuffledQueue(tracks, keepIndex) {
+    const shuffled = Array.isArray(tracks) ? tracks.slice() : [];
+    const hasFirst = Number.isInteger(keepIndex) && keepIndex >= 0 && keepIndex < shuffled.length;
+    const first = hasFirst ? shuffled.splice(keepIndex, 1)[0] : null;
+    for (let index = shuffled.length - 1; index > 0; index -= 1) {
+      const swap = Math.floor(Math.random() * (index + 1));
+      [shuffled[index], shuffled[swap]] = [shuffled[swap], shuffled[index]];
+    }
+    return hasFirst ? [first, ...shuffled] : shuffled;
   }
 
   function currentTrack() {
@@ -396,6 +408,12 @@
       case "play":
         loadAndPlay(Number.isFinite(Number(argument)) ? Number(argument) : Number(command.index) || 0);
         break;
+      case "shuffle":
+        activeIndex = Number(command.index) || 0;
+        activeTrack = playQueue[activeIndex];
+        renderChip();
+        reportNowPlaying();
+        break;
       case "pause":
         pausePlayback();
         break;
@@ -590,7 +608,7 @@
     const queuedTracks = nextTracks.length
       ? nextTracks.map((item, nextIndex) => `<button type="button" data-player-queue="${index + nextIndex + 1}">${musicViewEscape(item.title || "Untitled")}<small>${musicViewEscape(item.artist || "")}</small></button>`).join("")
       : `<p>${tracks.length ? "End of queue" : "Your queue will appear here."}</p>`;
-    root.innerHTML = `<div class="music-view-now">${cover}<div class="music-view-copy"><small>NOW PLAYING</small><h1>${musicViewEscape(track.title || "Choose something to play")}</h1><p>${musicViewEscape(track.artist || track.subtitle || "")}</p></div></div><input class="music-view-progress" data-music-seek type="range" min="0" max="100" value="${progress}" aria-label="Track progress"><div class="music-view-controls"><button type="button" data-player-action="prev" aria-label="Previous">${musicViewIcon("prev")}</button><button type="button" data-player-action="toggle" aria-label="Play or pause">${musicViewIcon(playerPlaying ? "pause" : "play")}</button><button type="button" data-player-action="next" aria-label="Next">${musicViewIcon("next")}</button></div><label class="music-view-volume">Volume<input type="range" data-player-volume min="0" max="100" value="${Number(musicState?.volume ?? 70)}" aria-label="Volume"></label><section class="music-view-queue"><h2>Up next</h2><div class="music-view-upnext">${queuedTracks}</div></section>${playbackError ? `<p class="music-view-error">${musicViewEscape(playbackError)}</p>` : ""}`;
+    root.innerHTML = `<div class="music-view-now">${cover}<div class="music-view-copy"><small>NOW PLAYING</small><h1>${musicViewEscape(track.title || "Choose something to play")}</h1><p>${musicViewEscape(track.artist || track.subtitle || "")}</p></div></div><input class="music-view-progress" data-music-seek type="range" min="0" max="100" value="${progress}" aria-label="Track progress"><div class="music-view-controls"><button type="button" class="${musicState?.shuffle ? "is-on" : ""}" data-player-action="shuffle" aria-label="Shuffle" aria-pressed="${!!musicState?.shuffle}"${tracks.length ? "" : " disabled"}>${musicViewIcon("shuffle")}</button><button type="button" data-player-action="prev" aria-label="Previous">${musicViewIcon("prev")}</button><button type="button" data-player-action="toggle" aria-label="Play or pause">${musicViewIcon(playerPlaying ? "pause" : "play")}</button><button type="button" data-player-action="next" aria-label="Next">${musicViewIcon("next")}</button></div><label class="music-view-volume">Volume<input type="range" data-player-volume min="0" max="100" value="${Number(musicState?.volume ?? 70)}" aria-label="Volume"></label><section class="music-view-queue"><h2>Up next</h2><div class="music-view-upnext">${queuedTracks}</div></section>${playbackError ? `<p class="music-view-error">${musicViewEscape(playbackError)}</p>` : ""}`;
   }
 
   function renderMusicBrowser() {
@@ -674,18 +692,46 @@
     try {
       let response = await fetch("/api/state/music", { cache: "no-store" });
       let current = await response.json();
-      const nextQueue = Array.isArray(commandQueue) ? commandQueue.slice() : [];
+      const isCurrentQueue = commandQueue === playQueue;
+      let nextQueue = Array.isArray(commandQueue) ? commandQueue.slice() : [];
+      let nextIndex = index;
+      let nextArgument = command === "play" && argument == null ? 0 : argument;
+      let shuffle = !!musicState?.shuffle;
+      let unshuffled = Array.isArray(musicState?.unshuffled) ? musicState.unshuffled.slice() : null;
+      if (command === "shuffle") {
+        const currentTrackId = currentTrack()?.id;
+        if (argument) {
+          unshuffled = queue().slice();
+          nextQueue = shuffledQueue(unshuffled, activeIndex);
+          nextIndex = 0;
+          shuffle = true;
+        } else {
+          nextQueue = Array.isArray(musicState?.unshuffled) ? musicState.unshuffled.slice() : queue().slice();
+          const restoredIndex = currentTrackId == null ? -1 : nextQueue.findIndex((track) => String(track?.id) === String(currentTrackId));
+          nextIndex = restoredIndex >= 0 ? restoredIndex : 0;
+          unshuffled = null;
+          shuffle = false;
+        }
+        nextArgument = !!argument;
+      } else if (command === "play" && shuffle && !isCurrentQueue) {
+        unshuffled = nextQueue.slice();
+        nextQueue = shuffledQueue(unshuffled, argument == null ? null : Number(index));
+        nextIndex = 0;
+        nextArgument = 0;
+      }
       const next = {
         target: frameLabel,
         queue: nextQueue,
-        index,
-        playing: command === "pause" || command === "stop" ? false : command === "volume" ? !!musicState?.playing : true,
+        index: nextIndex,
+        playing: command === "shuffle" ? playerPlaying : command === "pause" || command === "stop" ? false : command === "volume" || command === "seek" ? !!musicState?.playing : true,
         volume: command === "volume" ? Number(argument) : Number(musicState?.volume ?? 70),
-        seq: (Number(musicState?.seq) || 0) + 1,
+        shuffle,
+        seq: (Number(current.json?.seq) || Number(musicState?.seq) || 0) + 1,
         cmd: command,
-        arg: argument,
+        arg: nextArgument,
         at: new Date().toISOString()
       };
+      if (shuffle && Array.isArray(unshuffled)) next.unshuffled = unshuffled;
       for (let attempt = 0; attempt < 2; attempt++) {
         response = await fetch("/api/state/music", {
           method: "PUT",
@@ -693,8 +739,9 @@
           body: JSON.stringify({ json: next, base: Number(current.updated) || 0 })
         });
         const result = await response.json();
-        if (response.status === 409) {
+        if (response.status === 409 && attempt === 0) {
           current = result;
+          next.seq = (Number(result.json?.seq) || 0) + 1;
           continue;
         }
         if (!response.ok) throw new Error(result.error || "Could not update playback");
@@ -743,12 +790,13 @@
       if (button.dataset.viewId) return openMusicDetail(button.dataset.viewKind, button.dataset.viewId, button.dataset.viewTitle);
       if (button.hasAttribute("data-view-play-all")) {
         const tracks = (musicViewState.detail?.tiles || []).filter((tile) => tile.kind === "track").map((tile) => ({ id: tile.id, title: tile.title, artist: tile.subtitle, img: tile.img }));
-        if (tracks.length) return persistMusicCommand(tracks, 0);
+        if (tracks.length) return persistMusicCommand(tracks, 0, "play", null);
       }
       if (button.dataset.viewDetailTrack != null) {
         const tracks = (musicViewState.detail?.tiles || []).filter((tile) => tile.kind === "track").map((tile) => ({ id: tile.id, title: tile.title, artist: tile.subtitle, img: tile.img }));
         if (tracks.length) return persistMusicCommand(tracks, Number(button.dataset.viewDetailTrack));
       }
+      if (button.dataset.playerAction === "shuffle") return persistMusicCommand(queue(), activeIndex, "shuffle", !musicState?.shuffle);
       if (button.dataset.playerAction === "toggle") return persistMusicCommand(queue(), activeIndex, playerPlaying ? "pause" : "resume");
       if (button.dataset.playerAction === "next") return persistMusicCommand(queue(), activeIndex, "next");
       if (button.dataset.playerAction === "prev") return persistMusicCommand(queue(), activeIndex, "prev");

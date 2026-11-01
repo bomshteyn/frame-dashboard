@@ -28,8 +28,9 @@ test("phone page loads its readable source assets", () => {
 test("frame loads the lazy local music player", () => {
   const html = readFileSync("public/index.html", "utf8");
   const player = readFileSync("public/assets/music.js", "utf8");
-  assert.match(html, /src="\/assets\/music\.js\?v=4"/);
-  assert.match(html, /href="\/assets\/music\.css\?v=\d+"/);
+  assert.match(html, /src="\/assets\/music\.js\?v=5"/);
+  assert.match(html, /href="\/assets\/music\.css\?v=5"/);
+  assert.match(html, /href="\/assets\/music-view\.css\?v=2"/);
   assert.doesNotMatch(html, /hls\.light\.min\.js/);
   assert.match(player, /script\.src = "\/assets\/hls\.light\.min\.js"/);
 });
@@ -65,4 +66,41 @@ test("phone music commands write state directly with one conflict retry", () => 
   assert.match(phone, /mobileData\.music = next;\s*musicStateVersions\.music = Number\(result\.updated\)/);
   assert.match(phone, /writeMusicState\(next, !0\)/);
   assert.doesNotMatch(phone, /persistState\(`music`\)/);
+});
+
+test("phone and frame shuffle helpers keep the selected track first and return a permutation", () => {
+  const phone = readFileSync("public/assets/phone/app.js", "utf8");
+  const player = readFileSync("public/assets/music.js", "utf8");
+  const tracks = [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }];
+  for (const source of [phone, player]) {
+    const helper = source.match(/function shuffledQueue\(tracks, keepIndex\) \{[\s\S]*?\n  \}/);
+    assert.ok(helper, "shuffledQueue helper exists");
+    const shuffledQueue = new Function(`${helper[0]}; return shuffledQueue;`)();
+    const selectedFirst = shuffledQueue(tracks, 2);
+    assert.equal(selectedFirst[0], tracks[2]);
+    assert.deepEqual(selectedFirst.map((track) => track.id).sort(), tracks.map((track) => track.id).sort());
+    const fullShuffle = shuffledQueue(tracks, null);
+    assert.deepEqual(fullShuffle.map((track) => track.id).sort(), tracks.map((track) => track.id).sort());
+    assert.notEqual(fullShuffle, tracks);
+  }
+});
+
+test("shuffle toggles use the shared command shape and preserve shuffle queues", () => {
+  const phone = readFileSync("public/assets/phone/app.js", "utf8");
+  const player = readFileSync("public/assets/music.js", "utf8");
+  assert.match(phone, /cmd: `shuffle`,\s*arg: enabled,\s*shuffle: enabled/);
+  assert.match(phone, /var enabled = !current\.shuffle/);
+  assert.match(phone, /var originalQueue = nextQueue\.slice\(\),\s*keepIndex = extra == null \? null : Number\(index\)/);
+  assert.match(phone, /if \(command === `play` && current\.shuffle && nextQueue !== currentQueue\)/);
+  assert.match(phone, /unshuffled: originalQueue/);
+  assert.match(phone, /if \(enabled\) next\.unshuffled = unshuffled;\s*else delete next\.unshuffled;/);
+  assert.match(phone, /data-music-action="shuffle"[\s\S]*?aria-pressed="/);
+  assert.match(player, /if \(command === "shuffle"\) \{[\s\S]*?shuffle = true;[\s\S]*?nextArgument = !!argument;/);
+  assert.match(player, /const isCurrentQueue = commandQueue === playQueue;/);
+  assert.match(player, /command === "play" && shuffle && !isCurrentQueue/);
+  assert.match(player, /argument == null \? null : Number\(index\)/);
+  assert.match(player, /cmd: command,\s*arg: nextArgument/);
+  assert.match(player, /if \(shuffle && Array\.isArray\(unshuffled\)\) next\.unshuffled = unshuffled;/);
+  assert.match(player, /case "shuffle":\s*activeIndex = Number\(command\.index\) \|\| 0;\s*activeTrack = playQueue\[activeIndex\];\s*renderChip\(\);\s*reportNowPlaying\(\);/);
+  assert.match(player, /data-player-action="shuffle" aria-label="Shuffle" aria-pressed=/);
 });

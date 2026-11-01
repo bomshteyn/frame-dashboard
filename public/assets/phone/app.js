@@ -87,6 +87,7 @@ import {
       music: `<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>`,
       play: `<path d="m8 5 12 7-12 7z"/>`,
       pause: `<path d="M8 5v14M16 5v14"/>`,
+      shuffle: `<path d="m18 14 4 4-4 4"/><path d="m18 2 4 4-4 4"/><path d="M2 18h2.5a5 5 0 0 0 4-2l7-10a5 5 0 0 1 4-2H22"/><path d="M2 6h2.5a5 5 0 0 1 4 2l7 10a5 5 0 0 0 4 2H22"/>`,
       "delete-left": `<path d="M21 5H9l-6 7 6 7h12z"/><path d="m12 9 6 6m0-6-6 6"/>`,
       back: `<path d="m15 18-6-6 6-6"/>`,
       chevron: `<path d="m9 18 6-6-6-6"/>`,
@@ -889,10 +890,11 @@ import {
       artist = current.artist || ``,
       img = current.img || ``,
       playing = typeof state.playing === `boolean` ? state.playing : !!command.playing,
-      disabled = viewState.kodesh ? ` disabled` : ``;
+      disabled = viewState.kodesh ? ` disabled` : ``,
+      shuffleDisabled = viewState.kodesh || !queue.length ? ` disabled` : ``;
     return `<section class="m-music-now"><div class="m-music-now-art">` +
       (img ? `<img src="` + escapeHTML(img) + `" alt="">` : phoneIcon(`music`, 30)) +
-      `</div><div class="m-music-now-copy"><small>NOW PLAYING</small><strong>` + escapeHTML(title) + `</strong><span>` + escapeHTML(artist) + `</span></div><div class="m-music-controls"><button type="button" data-write data-music-action="prev" aria-label="Previous track"` + disabled + `>` + phoneIcon(`skip-back`) + `</button><button type="button" class="m-music-play" data-write data-music-action="toggle" aria-label="Play or pause"` + disabled + `>` + phoneIcon(playing ? `pause` : `play`) + `</button><button type="button" data-write data-music-action="next" aria-label="Next track"` + disabled + `>` + phoneIcon(`skip-forward`) + `</button></div><div class="m-music-target" role="group" aria-label="Play on"><button type="button" data-write data-music-target="small" class="` + (viewState.musicTarget === `small` ? `is-on` : ``) + `"` + disabled + `>10″</button><button type="button" data-write data-music-target="large" class="` + (viewState.musicTarget === `large` ? `is-on` : ``) + `"` + disabled + `>15″</button><button type="button" data-write data-music-target="both" class="` + (viewState.musicTarget === `both` ? `is-on` : ``) + `"` + disabled + `>Both</button></div><label class="m-music-volume"><span>Volume</span><input type="range" min="0" max="100" value="` + Number(viewState.musicVolume) + `" data-write data-music-volume aria-label="Volume"` + disabled + `></label></section>`;
+      `</div><div class="m-music-now-copy"><small>NOW PLAYING</small><strong>` + escapeHTML(title) + `</strong><span>` + escapeHTML(artist) + `</span></div><div class="m-music-controls"><button type="button" class="m-music-shuffle` + (command.shuffle ? ` is-on` : ``) + `" data-write data-music-action="shuffle" aria-label="Shuffle" aria-pressed="` + (!!command.shuffle) + `"` + shuffleDisabled + `>` + phoneIcon(`shuffle`) + `</button><button type="button" data-write data-music-action="prev" aria-label="Previous track"` + disabled + `>` + phoneIcon(`skip-back`) + `</button><button type="button" class="m-music-play" data-write data-music-action="toggle" aria-label="Play or pause"` + disabled + `>` + phoneIcon(playing ? `pause` : `play`) + `</button><button type="button" data-write data-music-action="next" aria-label="Next track"` + disabled + `>` + phoneIcon(`skip-forward`) + `</button></div><div class="m-music-target" role="group" aria-label="Play on"><button type="button" data-write data-music-target="small" class="` + (viewState.musicTarget === `small` ? `is-on` : ``) + `"` + disabled + `>10″</button><button type="button" data-write data-music-target="large" class="` + (viewState.musicTarget === `large` ? `is-on` : ``) + `"` + disabled + `>15″</button><button type="button" data-write data-music-target="both" class="` + (viewState.musicTarget === `both` ? `is-on` : ``) + `"` + disabled + `>Both</button></div><label class="m-music-volume"><span>Volume</span><input type="range" min="0" max="100" value="` + Number(viewState.musicVolume) + `" data-write data-music-volume aria-label="Volume"` + disabled + `></label></section>`;
   }
   function renderMusicList() {
     var list = viewState.musicList;
@@ -1016,21 +1018,91 @@ import {
       render();
     });
   }
+  function shuffledQueue(tracks, keepIndex) {
+    var shuffled = Array.isArray(tracks) ? tracks.slice() : [],
+      hasFirst = Number.isInteger(keepIndex) && keepIndex >= 0 && keepIndex < shuffled.length,
+      first = hasFirst ? shuffled.splice(keepIndex, 1)[0] : null;
+    for (var index = shuffled.length - 1; index > 0; index -= 1) {
+      var swap = Math.floor(Math.random() * (index + 1));
+      [shuffled[index], shuffled[swap]] = [shuffled[swap], shuffled[index]];
+    }
+    return hasFirst ? [first].concat(shuffled) : shuffled;
+  }
   function issueMusicCommand(command, queue, index, extra) {
     var current = mobileData.music || {},
-      next = Object.assign({}, current, {
+      currentQueue = Array.isArray(current.queue) ? current.queue : [],
+      nextQueue = Array.isArray(queue) ? queue : currentQueue,
+      nextIndex = index == null ? Number(current.index) || 0 : Number(index),
+      nextArgument = extra == null ? command === `play` ? 0 : `` : extra,
+      shuffleUpdate = null;
+    if (command === `play` && current.shuffle && nextQueue !== currentQueue) {
+      var originalQueue = nextQueue.slice(),
+        keepIndex = extra == null ? null : Number(index);
+      nextQueue = shuffledQueue(originalQueue, keepIndex);
+      nextIndex = 0;
+      nextArgument = 0;
+      shuffleUpdate = { shuffle: !0, unshuffled: originalQueue };
+    }
+    var next = Object.assign({}, current, {
         target: viewState.musicTarget || `small`,
-        queue: queue || current.queue || [],
-        index: index == null ? Number(current.index) || 0 : index,
-        playing: command === `pause` || command === `stop` ? !1 : command === `volume` || command === `seek` ? !!current.playing : !0,
+        queue: nextQueue,
+        index: nextIndex,
+        playing: command === `pause` || command === `stop` ? !1 : command === `volume` || command === `seek` || command === `shuffle` ? !!current.playing : !0,
         volume: Number(viewState.musicVolume),
         seq: Math.max(musicCommandSequence, Number(current.seq) || 0) + 1,
         cmd: command,
-        arg: extra == null ? `` : extra,
+        arg: nextArgument,
+        shuffle: !!current.shuffle,
         at: new Date().toISOString(),
-      });
+      }, shuffleUpdate || {});
+    if (!next.shuffle) delete next.unshuffled;
     musicCommandSequence = Number(next.seq) || musicCommandSequence;
     mobileData.music = next;
+    writeMusicState(next, !0);
+  }
+  function toggleMusicShuffle() {
+    var current = mobileData.music || {},
+      currentQueue = Array.isArray(current.queue) ? current.queue.slice() : [];
+    if (!currentQueue.length) return;
+    var nowState = currentMusicNowPlaying(),
+      currentId = nowState && nowState.id != null ? nowState.id : null,
+      currentIndex = currentId == null ? -1 : currentQueue.findIndex(function (track) { return track && String(track.id) === String(currentId); });
+    if (currentIndex < 0) {
+      currentIndex = Number(current.index);
+      if (!Number.isInteger(currentIndex) || currentIndex < 0 || currentIndex >= currentQueue.length) currentIndex = 0;
+      currentId = currentQueue[currentIndex] && currentQueue[currentIndex].id;
+    }
+    var enabled = !current.shuffle,
+      nextQueue,
+      nextIndex,
+      unshuffled;
+    if (enabled) {
+      unshuffled = currentQueue;
+      nextQueue = shuffledQueue(unshuffled, currentIndex);
+      nextIndex = 0;
+    } else {
+      unshuffled = Array.isArray(current.unshuffled) ? current.unshuffled.slice() : currentQueue;
+      var restoredIndex = currentId == null ? -1 : unshuffled.findIndex(function (track) { return track && String(track.id) === String(currentId); });
+      nextQueue = unshuffled;
+      nextIndex = restoredIndex >= 0 ? restoredIndex : 0;
+    }
+    var next = Object.assign({}, current, {
+      target: viewState.musicTarget || current.target || `small`,
+      queue: nextQueue,
+      index: nextIndex,
+      playing: nowState && typeof nowState.playing === `boolean` ? nowState.playing : !!current.playing,
+      volume: Number(viewState.musicVolume),
+      seq: Math.max(musicCommandSequence, Number(current.seq) || 0) + 1,
+      cmd: `shuffle`,
+      arg: enabled,
+      shuffle: enabled,
+      at: new Date().toISOString(),
+    });
+    if (enabled) next.unshuffled = unshuffled;
+    else delete next.unshuffled;
+    musicCommandSequence = Number(next.seq) || musicCommandSequence;
+    mobileData.music = next;
+    render();
     writeMusicState(next, !0);
   }
   function musicTileFromButton(button) {
@@ -1539,7 +1611,11 @@ import {
           var listQueue = (viewState.musicList && viewState.musicList.tiles || []).filter(function (tile) { return tile.kind === `track`; }).map(function (tile) {
             return { id: tile.id, title: tile.title, artist: tile.subtitle || ``, img: tile.img || `` };
           });
-          if (listQueue.length) issueMusicCommand(`play`, listQueue, 0, 0);
+          if (listQueue.length) issueMusicCommand(`play`, listQueue, 0, null);
+          return;
+        }
+        if (musicAction === `shuffle`) {
+          toggleMusicShuffle();
           return;
         }
         if (musicAction === `toggle`) {
@@ -1572,7 +1648,11 @@ import {
           var oldCommand = mobileData.music;
           issueMusicCommand(oldCommand.playing ? `resume` : `pause`);
         } else {
-          mobileData.music = Object.assign({}, mobileData.music || {}, { target: viewState.musicTarget });
+          mobileData.music = Object.assign({}, mobileData.music || {}, {
+            target: viewState.musicTarget,
+            shuffle: !!(mobileData.music && mobileData.music.shuffle),
+          });
+          if (!mobileData.music.shuffle) delete mobileData.music.unshuffled;
           writeMusicState(mobileData.music);
         }
         return;

@@ -94,11 +94,21 @@
   cursor: pointer;
 }
 
-.music-view-controls button:nth-child(2) {
+.music-view-controls button[data-player-action="toggle"] {
   width: 64px;
   height: 64px;
   color: #fff;
   background: #188b82;
+}
+
+.music-view-controls button.is-on {
+  color: #fff;
+  background: #188b82;
+}
+
+.music-view-controls button:disabled {
+  opacity: .5;
+  cursor: default;
 }
 
 .music-view-controls .music-view-icon {

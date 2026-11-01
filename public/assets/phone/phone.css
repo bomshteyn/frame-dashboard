@@ -1402,6 +1402,10 @@ textarea {
   background: var(--accent);
   color: #fff;
 }
+.m-music-controls button.is-on {
+  background: var(--accent);
+  color: #fff;
+}
 .m-music-now .m-music-target {
   grid-column: 1 / -1;
   grid-template-columns: repeat(3, minmax(0, 1fr));
