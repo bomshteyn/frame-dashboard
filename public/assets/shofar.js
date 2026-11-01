@@ -114,9 +114,9 @@
       var disabled = locked || !loaded || !windowsLoaded || saving;
       return '<p class="m-muted">Plays on the frames 15 minutes before candle lighting and at candle lighting. Silent when Shabbat or Yom Tov starts during Yom Tov.</p>' +
         (locked ? '<p class="m-muted">Settings are locked during Shabbat/Yom Tov</p>' : "") +
-        '<div class="m-shofar-controls"><label class="m-shofar-toggle"><input type="checkbox" data-shofar-on' + (setting.on ? " checked" : "") + (disabled ? " disabled" : "") + '>On</label>' +
-        '<button type="button" class="m-mini" data-shofar-test' + (disabled ? " disabled" : "") + '>Test on frames</button></div>' +
-        '<label class="m-shofar-volume"><span>Volume <b>' + setting.volume + '</b></span><input type="range" min="0" max="100" value="' + setting.volume + '" data-shofar-volume' + (disabled ? " disabled" : "") + '></label>' +
+        '<div class="m-shofar-controls"><label class="m-shofar-toggle"><input type="checkbox" data-write data-shofar-on' + (setting.on ? " checked" : "") + (disabled ? " disabled" : "") + '>On</label>' +
+        '<button type="button" class="m-mini" data-write data-shofar-test' + (disabled ? " disabled" : "") + '>Test on frames</button></div>' +
+        '<label class="m-shofar-volume"><span>Volume <b>' + setting.volume + '</b></span><input type="range" min="0" max="100" value="' + setting.volume + '" data-write data-shofar-volume' + (disabled ? " disabled" : "") + '></label>' +
         (feedback ? '<p class="m-muted m-shofar-status">' + esc(feedback) + "</p>" : "") +
         '<p class="m-muted">' + esc(nextText()) + "</p>" +
         (loadError ? '<p class="m-muted">' + esc(loadError) + "</p>" : "");
@@ -124,6 +124,7 @@
     function paint() {
       var element = document.querySelector("[data-shofar-body]");
       if (element) element.innerHTML = body();
+      document.dispatchEvent(new Event("hq:shofar-updated"));
     }
     function loadSetting() {
       if (loading) return;
@@ -157,7 +158,7 @@
     function section() {
       if (!loaded && !loading && !loadAttempted) loadSetting();
       if (!windowsLoaded) loadWindows();
-      return '<section class="m-frame-shofar"><div class="m-section-heading"><h2 class="serif">Shabbat shofar</h2></div><div data-shofar-body>' + body() + "</div></section>";
+      return '<div data-shofar-body>' + body() + "</div>";
     }
     function applyPatch(base, patch) {
       var changes = typeof patch === "function" ? patch(base) : patch;
@@ -227,13 +228,11 @@
     });
     setInterval(paint, 60000);
 
-    var hidden = window.HQHidden;
-    if (hidden && typeof hidden.html === "function") {
-      var hiddenHtml = hidden.html;
-      hidden.html = function () { return section() + hiddenHtml.apply(hidden, arguments); };
-    } else {
-      window.HQHidden = { html: section };
-    }
+    window.HQShofar.phoneHtml = section;
+    window.HQShofar.phoneStatus = function () {
+      if (!loaded) return "Loading settings…";
+      return setting.on ? "On" : "Off";
+    };
   }
 
   function frame() {

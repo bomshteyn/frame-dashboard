@@ -184,24 +184,35 @@
   if (App.on) App.on("mode", close);
 
   function phone() {
-    var list = null, loading = false, error = "";
+    var list = null, loading = false, error = "", selected = null;
     css(
-      ".m-hh-row{display:flex;gap:12px;align-items:center;background:var(--card);border-radius:16px;margin:0 0 10px;padding:10px}" +
-      ".m-hh-row img{width:72px;height:72px;border-radius:12px;object-fit:cover;background:var(--paper-2);flex:none}" +
-      ".m-hh-row span{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}.m-hh-row small{opacity:.7}" 
+      ".m-hh-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}" +
+      ".m-hh-thumb{position:relative;aspect-ratio:1;border-radius:12px;overflow:hidden;padding:0;background:var(--paper-2)}" +
+      ".m-hh-thumb img{width:100%;height:100%;object-fit:cover;display:block}" +
+      ".m-hh-action-backdrop{position:fixed;inset:0;z-index:60;background:rgba(31,35,30,.4);display:grid;align-items:end;padding:16px}" +
+      ".m-hh-action{width:min(440px,100%);margin:0 auto;background:var(--card);border-radius:24px;padding:16px;box-shadow:0 16px 48px rgba(0,0,0,.18)}" +
+      ".m-hh-action img{display:block;width:min(220px,70vw);aspect-ratio:1;object-fit:cover;border-radius:16px;margin:0 auto 14px}" +
+      ".m-hh-action button,.m-hh-action a{display:flex;align-items:center;justify-content:center;width:100%;min-height:48px;margin-top:8px;border-radius:14px;text-decoration:none}"
     );
     function body() {
       if (error) return '<div class="m-empty">' + esc(error) + "</div>";
       if (!list) return '<div class="m-empty">Loading…</div>';
-      if (!list.length) return '<div class="m-empty">No hidden photos. Hide one on the frame from the Photos screen, or press and hold the screensaver.</div>';
-      return list.map(function (p) {
-        return '<div class="m-hh-row"><img src="' + esc(p.src) + '" alt="" loading="lazy"><span><small>Hidden ' + esc(new Date(p.hidden).toLocaleDateString()) + (p.date ? " · taken " + esc(p.date) : "") + "</small>" +
-          '</span><button type="button" class="m-mini" data-hh-unhide="' + esc(p.id) + '" data-hh-album="' + esc(p.album) + '">Unhide</button></div>';
-      }).join("");
+      if (!list.length) return '<div class="m-empty">No hidden photos.</div>';
+      var grid = '<div class="m-hh-grid">' + list.map(function (p, index) {
+        return '<button type="button" class="m-hh-thumb" data-hh-select="' + index + '" aria-label="View hidden photo"><img src="' + esc(p.src) + '" alt="" loading="lazy"></button>';
+      }).join("") + "</div>";
+      if (!selected) return grid;
+      var link = selected.googlePhotosUrl || selected.google_photos_url || selected.link || selected.url || "";
+      return grid + '<div class="m-hh-action-backdrop" data-hh-overlay><section class="m-hh-action" role="dialog" aria-modal="true" aria-label="Hidden photo actions">' +
+        '<img src="' + esc(selected.src) + '" alt="">' +
+        '<button type="button" class="m-btn m-btn--solid" data-write data-hh-unhide="' + esc(selected.id) + '" data-hh-album="' + esc(selected.album) + '">Unhide</button>' +
+        (link ? '<a class="m-btn" href="' + esc(link) + '" target="_blank" rel="noopener">Open in Google Photos</a>' : "") +
+        '<button type="button" class="m-btn" data-hh-cancel>Cancel</button></section></div>';
     }
     function paint() {
       var el = document.querySelector("[data-hh-body]");
       if (el) el.innerHTML = body();
+      document.dispatchEvent(new Event("hq:hidden-updated"));
     }
     function load() {
       if (loading) return;
@@ -222,17 +233,30 @@
     window.HQHidden = {
       html: function () {
         if (!list && !error) setTimeout(load);
-        return '<section class="m-frame-hidden"><div class="m-section-heading"><h2 class="serif">Hidden photos</h2></div>' +
-          '<p class="m-muted">These never show on the frames. They stay in Google Photos.</p><div data-hh-body>' + body() + "</div></section>";
+        return '<p class="m-muted">These photos stay in Google Photos but are hidden from the frames.</p><div data-hh-body>' + body() + "</div>";
       },
+      count: function () { if (!list && !loading && !error) load(); return list ? list.length : 0; },
+      load: load,
     };
     document.addEventListener("click", function (e) {
+      var select = e.target.closest && e.target.closest("[data-hh-select]");
+      if (select) {
+        selected = list && list[Number(select.dataset.hhSelect)] || null;
+        paint();
+        return;
+      }
+      if ((e.target.closest && e.target.closest("button[data-hh-cancel]")) || e.target.hasAttribute("data-hh-overlay")) {
+        selected = null;
+        paint();
+        return;
+      }
       var b = e.target.closest && e.target.closest("[data-hh-unhide]");
       if (!b || b.disabled) return;
       b.disabled = true;
       b.textContent = "…";
       post("/api/photos/unhide", { album: b.dataset.hhAlbum, src: b.dataset.hhUnhide }).then(function () {
         list = list.filter(function (p) { return !(p.id === b.dataset.hhUnhide && p.album === b.dataset.hhAlbum); });
+        selected = null;
         paint();
       }).catch(function (err) {
         b.disabled = false;
@@ -243,5 +267,6 @@
     document.addEventListener("visibilitychange", function () {
       if (!document.hidden) load();
     });
+    load();
   }
 })();

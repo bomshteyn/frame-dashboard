@@ -21,11 +21,29 @@ import {
       kodesh: !1,
       heartbeat: 0,
       modal: null,
+      sheet: null,
       held: !1,
       holdTimer: null,
       wakeLock: null,
       toastTimer: null,
       renderPending: !1,
+      musicConnected: null,
+      musicError: ``,
+      musicStep: `credentials`,
+      musicEmail: ``,
+      musicPassword: ``,
+      musicProfiles: [],
+      musicProfile: null,
+      musicPin: ``,
+      musicView: `home`,
+      musicList: null,
+      musicSearch: ``,
+      musicSections: [],
+      musicLibrary: [],
+      musicRecent: [],
+      musicNowPlaying: null,
+      musicTarget: `small`,
+      musicVolume: 70,
     },
     stateSync = createStateSync(mobileData, {
       pauseWhenHidden: !0,
@@ -97,6 +115,7 @@ import {
       (viewState.tab = tabName),
       (viewState.screen = tabName === `shopping` ? `stores` : tabName),
       (viewState.modal = null),
+      (viewState.sheet = null),
       render());
   }
   function persistState(key) {
@@ -663,6 +682,199 @@ import {
         : ``)
     );
   }
+  function musicApi(path, options) {
+    return fetch(path, Object.assign({ cache: `no-store` }, options || {}))
+      .then(function (response) {
+        return response.json().catch(function () {
+          return {};
+        }).then(function (result) {
+          if (response.status === 403 && result.relogin) {
+            viewState.musicConnected = !1;
+            viewState.musicError = `Please connect to 24six again.`;
+            viewState.musicStep = `credentials`;
+            viewState.sheet = `music-connect`;
+            render();
+          }
+          if (!response.ok) throw new Error(result.error || `24six request failed`);
+          return result;
+        });
+      });
+  }
+  function musicPost(path, body) {
+    return musicApi(path, {
+      method: `POST`,
+      headers: { "content-type": `application/json` },
+      body: JSON.stringify(body || {}),
+    });
+  }
+  function loadMusicShelves() {
+    Promise.all([
+      musicApi(`/api/music/home`),
+      musicApi(`/api/music/library`),
+      musicApi(`/api/music/recent`),
+    ]).then(function (result) {
+      viewState.musicSections = result[0].sections || [];
+      viewState.musicLibrary = result[1].tiles || [];
+      viewState.musicRecent = result[2].tiles || [];
+      render();
+    }).catch(function (error) {
+      viewState.musicError = error.message;
+      render();
+    });
+  }
+  function loadMusicStatus() {
+    musicApi(`/api/music/status`).then(function (result) {
+      viewState.musicConnected = !!result.connected;
+      viewState.musicProfile = result.profile || null;
+      viewState.musicEmail = result.email || ``;
+      var command = mobileData.music || {};
+      viewState.musicTarget = command.target || `small`;
+      viewState.musicVolume = Number.isFinite(Number(command.volume)) ? Number(command.volume) : 70;
+      viewState.musicNowPlaying = currentMusicNowPlaying();
+      if (viewState.musicConnected) loadMusicShelves();
+      else render();
+    }).catch(function () {
+      viewState.musicConnected = !1;
+      render();
+    });
+  }
+  function currentMusicNowPlaying() {
+    var state = mobileData.music_now_small || mobileData.music_now_large || {};
+    return state.json || state;
+  }
+  function renderMusicTile(tile) {
+    var id = escapeHTML(tile.id),
+      title = escapeHTML(tile.title || `Untitled`),
+      subtitle = escapeHTML(tile.subtitle || ``),
+      image = tile.img
+        ? `<img src="` + escapeHTML(tile.img) + `" alt="" loading="lazy">`
+        : `<span class="m-music-cover-placeholder">♪</span>`;
+    return tile.kind === `track`
+      ? `<button type="button" class="m-music-tile" data-write data-music-track="` + id + `" data-title="` + title + `" data-artist="` + subtitle + `" data-img="` + escapeHTML(tile.img || ``) + `"` + (viewState.kodesh ? ` disabled` : ``) + `>` + image + `<span><strong>` + title + `</strong><small>` + subtitle + `</small></span></button>`
+      : `<button type="button" class="m-music-tile" data-music-open="` + id + `" data-music-kind="` + escapeHTML(tile.kind || `playlist`) + `" data-title="` + title + `">` + image + `<span><strong>` + title + `</strong><small>` + subtitle + `</small></span></button>`;
+  }
+  function renderMusicShelf(title, tiles) {
+    if (!tiles || !tiles.length) return ``;
+    return `<section class="m-music-shelf"><div class="m-shelf-heading"><h2>` + escapeHTML(title) + `</h2><span>` + tiles.length + `</span></div><div class="m-music-shelf-row">` + tiles.slice(0, 12).map(renderMusicTile).join(``) + `</div></section>`;
+  }
+  function renderMusicNowCard() {
+    var state = currentMusicNowPlaying(),
+      command = mobileData.music || {},
+      queue = Array.isArray(command.queue) ? command.queue : [],
+      current = queue[Number(command.index) || 0] || state,
+      title = current.title || state.title || `Nothing playing`,
+      artist = current.artist || state.artist || ``,
+      img = current.img || state.img || ``,
+      disabled = viewState.kodesh ? ` disabled` : ``;
+    return `<section class="m-music-now"><div class="m-music-now-art">` +
+      (img ? `<img src="` + escapeHTML(img) + `" alt="">` : `<span>♪</span>`) +
+      `</div><div class="m-music-now-copy"><small>NOW PLAYING</small><strong>` + escapeHTML(title) + `</strong><span>` + escapeHTML(artist) + `</span></div><div class="m-music-controls"><button type="button" data-write data-music-action="prev" aria-label="Previous track"` + disabled + `>‹</button><button type="button" class="m-music-play" data-write data-music-action="toggle" aria-label="Play or pause"` + disabled + `>` + (command.playing ? `Ⅱ` : `▶`) + `</button><button type="button" data-write data-music-action="next" aria-label="Next track"` + disabled + `>›</button></div><div class="m-music-target" role="group" aria-label="Play on"><button type="button" data-write data-music-target="small" class="` + (viewState.musicTarget === `small` ? `is-on` : ``) + `"` + disabled + `>10″</button><button type="button" data-write data-music-target="large" class="` + (viewState.musicTarget === `large` ? `is-on` : ``) + `"` + disabled + `>15″</button><button type="button" data-write data-music-target="both" class="` + (viewState.musicTarget === `both` ? `is-on` : ``) + `"` + disabled + `>Both</button></div><label class="m-music-volume"><span>Volume</span><input type="range" min="0" max="100" value="` + Number(viewState.musicVolume) + `" data-write data-music-volume aria-label="Volume"` + disabled + `></label></section>`;
+  }
+  function renderMusicList() {
+    var list = viewState.musicList;
+    if (!list) return ``;
+    return `<div class="m-music-list-head"><button type="button" class="m-back" data-music-action="back">‹ Back</button><h2 class="serif">` + escapeHTML(list.title) + `</h2></div><button type="button" class="m-btn m-btn--solid m-music-play-all" data-write data-music-action="play-all"` + (viewState.kodesh ? ` disabled` : ``) + `>Play all</button><div class="m-music-track-list">` + (list.tiles || []).map(function (tile, index) {
+      return `<button type="button" class="m-music-track" data-write data-music-track-index="` + index + `"` + (viewState.kodesh ? ` disabled` : ``) + `><span class="m-track-number">` + (index + 1) + `</span><span><strong>` + escapeHTML(tile.title) + `</strong><small>` + escapeHTML(tile.subtitle || ``) + `</small></span><span aria-hidden="true">▶</span></button>`;
+    }).join(``) + `</div>`;
+  }
+  function renderMusicQueue() {
+    var command = mobileData.music || {},
+      queue = Array.isArray(command.queue) ? command.queue : [];
+    if (!queue.length) return ``;
+    return `<section class="m-music-queue"><div class="m-shelf-heading"><h2>Up next</h2><span>` + queue.length + ` tracks</span></div>` + queue.map(function (track, index) {
+      return `<button type="button" class="m-music-track` + (index === Number(command.index) ? ` is-current` : ``) + `" data-write data-music-queue-index="` + index + `"` + (viewState.kodesh ? ` disabled` : ``) + `><span class="m-track-number">` + (index === Number(command.index) ? `♪` : index + 1) + `</span><span><strong>` + escapeHTML(track.title || `Untitled`) + `</strong><small>` + escapeHTML(track.artist || ``) + `</small></span><span aria-hidden="true">›</span></button>`;
+    }).join(``) + `</section>`;
+  }
+  function renderMusic() {
+    if (viewState.musicConnected === null) return `<div class="m-empty">Loading 24six…</div>`;
+    if (!viewState.musicConnected) return `<section class="m-music-connect-card"><span class="m-music-mark">♪</span><h2 class="serif">Music for home</h2><p class="m-muted">Connect your 24six account to browse and play on your frames.</p><button type="button" class="m-btn m-btn--solid" data-write data-music-action="connect"` + (viewState.kodesh ? ` disabled` : ``) + `>Connect 24six</button>` + (viewState.musicError ? `<p class="m-music-error">` + escapeHTML(viewState.musicError) + `</p>` : ``) + `</section>`;
+    if (viewState.musicList) return renderMusicList();
+    return renderMusicNowCard() +
+      renderMusicQueue() +
+      `<form class="m-form m-music-search" data-form="music-search"><input class="m-input" name="musicSearch" type="search" placeholder="Search 24six" aria-label="Search 24six" value="` + escapeHTML(viewState.musicSearch) + `"><button type="submit" class="m-btn">Search</button></form>` +
+      (viewState.musicError ? `<p class="m-music-error">` + escapeHTML(viewState.musicError) + `</p>` : ``) +
+      renderMusicShelf(`Your library`, viewState.musicLibrary) +
+      renderMusicShelf(`Recently played`, viewState.musicRecent) +
+      viewState.musicSections.map(function (section) {
+        return renderMusicShelf(section.title, section.tiles);
+      }).join(``) +
+      `<section class="m-music-account"><div><strong>` + escapeHTML(viewState.musicProfile && viewState.musicProfile.name || `24six account`) + `</strong><small>Connected to 24six</small></div><button type="button" data-write data-music-action="switch"` + (viewState.kodesh ? ` disabled` : ``) + `>Switch profile</button><button type="button" data-write data-music-action="disconnect"` + (viewState.kodesh ? ` disabled` : ``) + `>Disconnect</button></section>`;
+  }
+  function renderMusicConnect() {
+    var error = viewState.musicError ? `<p class="m-music-error" role="alert">` + escapeHTML(viewState.musicError) + `</p>` : ``;
+    if (viewState.musicStep === `profiles`) return error + `<p class="m-muted">Choose a profile</p><div class="m-profile-grid">` + viewState.musicProfiles.map(function (profile) {
+      return `<button type="button" class="m-profile-card" data-write data-profile-id="` + escapeHTML(profile.id) + `"` + (viewState.kodesh ? ` disabled` : ``) + `>` + (profile.img ? `<img src="` + escapeHTML(profile.img) + `" alt="">` : `<span class="m-profile-avatar">` + escapeHTML((profile.name || `?`).charAt(0)) + `</span>`) + `<strong>` + escapeHTML(profile.name || `Profile`) + `</strong><small>` + (profile.pin_required ? `PIN required` : `No PIN`) + `</small></button>`;
+    }).join(``) + `</div>`;
+    if (viewState.musicStep === `pin`) return error + `<p class="m-muted">Enter the 4-digit PIN for <strong>` + escapeHTML(viewState.musicProfile && viewState.musicProfile.name || `this profile`) + `</strong></p><div class="m-pin-display" aria-label="PIN">` + `● `.repeat(viewState.musicPin.length) + `○ `.repeat(4 - viewState.musicPin.length) + `</div><div class="m-pin-pad">` + [`1`,`2`,`3`,`4`,`5`,`6`,`7`,`8`,`9`,`back`,`0`,`clear`].map(function (digit) {
+      return `<button type="button" data-write data-pin-digit="` + digit + `"` + (viewState.kodesh ? ` disabled` : ``) + `>` + (digit === `back` ? `⌫` : digit === `clear` ? `Clear` : digit) + `</button>`;
+    }).join(``) + `</div>`;
+    return error + `<form class="m-music-credentials" data-form="music-credentials"><label>Email<input class="m-input" data-write name="musicEmail" type="email" autocomplete="username" required value="` + escapeHTML(viewState.musicEmail) + `"` + (viewState.kodesh ? ` disabled` : ``) + `></label><label>Password<input class="m-input" data-write name="musicPassword" type="password" autocomplete="current-password" required` + (viewState.kodesh ? ` disabled` : ``) + `></label><button type="submit" data-write class="m-btn m-btn--solid"` + (viewState.kodesh ? ` disabled` : ``) + `>Continue</button></form>`;
+  }
+  function selectMusicProfile(profile) {
+    viewState.musicProfile = profile;
+    viewState.musicError = ``;
+    viewState.musicPin = ``;
+    if (!profile.pin_required) return loginMusicProfile(``);
+    viewState.musicStep = `pin`;
+    render();
+  }
+  function loginMusicProfile(pin) {
+    var credentials = {
+      email: viewState.musicEmail,
+      password: viewState.musicPassword,
+      profile_id: viewState.musicProfile && viewState.musicProfile.id,
+      device_name: `Home HQ`,
+    };
+    if (pin) credentials.pin = pin;
+    musicPost(`/api/music/login`, credentials).then(function (result) {
+      viewState.musicConnected = !0;
+      viewState.musicProfile = result.profile || viewState.musicProfile;
+      viewState.musicPassword = ``;
+      viewState.musicError = ``;
+      viewState.sheet = null;
+      viewState.musicStep = `credentials`;
+      render();
+      loadMusicShelves();
+    }).catch(function (error) {
+      viewState.musicError = error.message;
+      if (viewState.musicStep === `pin`) viewState.musicPin = ``;
+      render();
+    });
+  }
+  function openMusicList(kind, id, title) {
+    musicApi(`/api/music/list/` + encodeURIComponent(kind) + `/` + encodeURIComponent(id)).then(function (result) {
+      viewState.musicList = { kind: kind, id: id, title: title || `Music`, tiles: result.tiles || [] };
+      viewState.musicView = `list`;
+      viewState.musicError = ``;
+      render();
+    }).catch(function (error) {
+      viewState.musicError = error.message;
+      render();
+    });
+  }
+  function issueMusicCommand(command, queue, index, extra) {
+    var current = mobileData.music || {};
+    mobileData.music = Object.assign({}, current, {
+      target: viewState.musicTarget || `small`,
+      queue: queue || current.queue || [],
+      index: index == null ? Number(current.index) || 0 : index,
+      playing: command === `pause` || command === `stop` ? !1 : command === `volume` || command === `seek` ? !!current.playing : !0,
+      volume: Number(viewState.musicVolume),
+      seq: (Number(current.seq) || 0) + 1,
+      cmd: command,
+      arg: extra == null ? `` : extra,
+      at: new Date().toISOString(),
+    });
+    persistState(`music`);
+  }
+  function musicTileFromButton(button) {
+    return {
+      id: button.dataset.musicTrack || button.dataset.musicTrackId || ``,
+      title: button.dataset.title || ``,
+      artist: button.dataset.artist || ``,
+      img: button.dataset.img || ``,
+    };
+  }
   function frameLastSeenText() {
     if (!viewState.heartbeat) return `Frame has not checked in yet`;
     var value = Math.max(
@@ -681,20 +893,21 @@ import {
   }
   function renderFrame() {
     return (
-      `<div class="m-section-heading"><h2 class="serif">Frame remote</h2></div><div class="m-frame-status" data-frame-last-seen>` +
+      `<div class="m-section-heading"><h2 class="serif">Frame</h2></div><div class="m-frame-status" data-frame-last-seen><span class="m-status-dot"></span>` +
       escapeHTML(frameLastSeenText()) +
-      `</div><div class="m-frame-grid">` +
+      `</div><div class="m-frame-segment" role="group" aria-label="Screen power"><button type="button" data-remote="screenOn" data-write ` +
+      (viewState.kodesh ? `disabled` : ``) +
+      `>Screen on</button><button type="button" data-remote="screenOff" data-write ` +
+      (viewState.kodesh ? `disabled` : ``) +
+      `>Screen off</button></div><div class="m-frame-grid">` +
       [
-        [`Screen off`, `screenOff`, ``],
-        [`Screen on`, `screenOn`, ``],
-        [`Today`, `go`, `home`],
-        [`Calendar`, `go`, `calendar`],
-        [`Tasks`, `go`, `tasks`],
-        [`Shopping`, `go`, `shopping`],
-        [`Photos`, `go`, `photos`],
-        [`Weather`, `go`, `weather`],
-        [`Next photo`, `nextPhoto`, ``],
-        [`Reload frame`, `reload`, ``],
+        [`Today`, `go`, `home`, `calendar`],
+        [`Calendar`, `go`, `calendar`, `calendar`],
+        [`Tasks`, `go`, `tasks`, `tasks`],
+        [`Shopping`, `go`, `shopping`, `cart`],
+        [`Photos`, `go`, `photos`, `photos`],
+        [`Weather`, `go`, `weather`, `weather`],
+        [`Next photo`, `nextPhoto`, ``, `next`],
       ]
         .map(function (item) {
           return (
@@ -704,25 +917,22 @@ import {
             escapeHTML(item[2]) +
             `" data-write ` +
             (viewState.kodesh ? `disabled` : ``) +
-            `>` +
+            `><span class="m-frame-icon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
+            (window.ICONS[item[3]] || ``) +
+            `</svg></span><span>` +
             escapeHTML(item[0]) +
-            `<small>` +
-            (item[1] === `screenOff`
-              ? `Turn display off`
-              : item[1] === `screenOn`
-                ? `Turn display on`
-                : item[1] === `go`
-                  ? `Open on the frame`
-                  : item[1] === `nextPhoto`
-                    ? `Advance slideshow`
-                    : `Send command`) +
-            `</small></button>`
+            `</span></button>`
           );
         })
         .join(``) +
-      `</div>` +
-      renderPeople() +
-      (window.HQHidden ? window.HQHidden.html() : ``)
+      `</div><div class="m-section-heading m-settings-heading"><h2 class="serif">Settings</h2></div><div class="m-settings-list">` +
+      `<button type="button" class="m-setting-row" data-open-sheet="hidden"><span class="m-setting-icon">◌</span><span><strong>Hidden photos</strong><small>Photos kept off the frame</small></span><b class="m-row-trailing"><span data-hidden-count>` +
+      String(window.HQHidden && window.HQHidden.count ? window.HQHidden.count() : 0) +
+      `</span><span aria-hidden="true">›</span></b></button><button type="button" class="m-setting-row" data-open-sheet="people"><span class="m-setting-icon">♙</span><span><strong>People</strong><small>Family names and assignments</small></span><b class="m-row-trailing">›</b></button><button type="button" class="m-setting-row" data-open-sheet="shofar"><span class="m-setting-icon">◖</span><span><strong>Shabbat shofar</strong><small>` +
+      (window.HQShofar && window.HQShofar.phoneStatus ? escapeHTML(window.HQShofar.phoneStatus()) : `Alerts and frame volume`) +
+      `</small></span><b class="m-row-trailing">›</b></button><button type="button" class="m-setting-row" data-remote="reload" data-write ` +
+      (viewState.kodesh ? `disabled` : ``) +
+      `><span class="m-setting-icon">↻</span><span><strong>Reload frame</strong><small>Restart the frame app</small></span><b class="m-row-trailing">›</b></button></div>`
     );
   }
   function renderPeople() {
@@ -764,6 +974,11 @@ import {
           `<main class="m-content">` +
           renderFrame() +
           `</main>`
+        : viewState.tab === `music`
+          ? renderHeader(`Music`) +
+            `<main class="m-content">` +
+            renderMusic() +
+            `</main>`
         : viewState.screen === `manage`
           ? renderHeader(`Manage shopping`, !0) +
             `<main class="m-content">` +
@@ -781,6 +996,17 @@ import {
               `<main class="m-content">` +
               renderShopping() +
               `</main>`;
+  }
+  function renderSheet() {
+    if (!viewState.sheet) return ``;
+    var sheetBody = ``;
+    if (viewState.sheet === `people`) sheetBody = renderPeople();
+    else if (viewState.sheet === `hidden`) sheetBody = window.HQHidden && window.HQHidden.html ? window.HQHidden.html() : `<p class="m-muted">Hidden photos are loading…</p>`;
+    else if (viewState.sheet === `shofar`) sheetBody = window.HQShofar && window.HQShofar.phoneHtml ? window.HQShofar.phoneHtml() : `<p class="m-muted">Shabbat shofar settings are loading…</p>`;
+    else if (viewState.sheet === `music-connect`) sheetBody = renderMusicConnect();
+    return `<div class="m-sheet-backdrop` + (viewState.sheet === `hidden` ? ` m-sheet-backdrop--full` : ``) + `" data-sheet-backdrop><section class="m-sheet` + (viewState.sheet === `hidden` ? ` m-sheet--fullscreen` : ``) + `" role="dialog" aria-modal="true"><div class="m-sheet-grab"></div><header class="m-sheet-header"><h2 class="serif">` +
+      escapeHTML(viewState.sheet === `people` ? `People` : viewState.sheet === `hidden` ? `Hidden photos` : viewState.sheet === `shofar` ? `Shabbat shofar` : `Connect 24six`) +
+      `</h2><button type="button" class="m-sheet-close" data-sheet-close aria-label="Close">×</button></header><div class="m-sheet-body">` + sheetBody + `</div></section></div>`;
   }
   function renderModal() {
     if (!viewState.modal) return ``;
@@ -828,9 +1054,10 @@ import {
         viewState.renderPending = !0;
         var element = appRoot.querySelector(`.m-banner`);
         (element && (element.hidden = !viewState.kodesh),
-          appRoot.querySelectorAll(`[data-write]`).forEach(function (item) {
-            item.disabled = viewState.kodesh;
-          }));
+          viewState.kodesh &&
+            appRoot.querySelectorAll(`[data-write]`).forEach(function (item) {
+              item.disabled = !0;
+            }));
         return;
       }
       viewState.renderPending = !1;
@@ -839,7 +1066,9 @@ import {
           ? `Shopping`
           : viewState.tab === `tasks`
             ? `Tasks`
-            : `Frame`;
+            : viewState.tab === `music`
+              ? `Music`
+              : `Frame`;
       ((appRoot.innerHTML =
         `<div class="m-banner"` +
         (viewState.kodesh ? `` : ` hidden`) +
@@ -849,6 +1078,7 @@ import {
         [
           [`shopping`, `Shopping`, `cart`],
           [`tasks`, `Tasks`, `tasks`],
+          [`music`, `Music`, `music`],
           [`frame`, `Frame`, `home`],
         ]
           .map(function (item) {
@@ -858,7 +1088,7 @@ import {
               `" data-tab="` +
               item[0] +
               `"><svg class="m-tab-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
-              (window.ICONS[item[2]] || ``) +
+              (window.ICONS[item[2]] || (item[2] === `music` ? `<path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle>` : ``)) +
               `</svg>` +
               item[1] +
               `</button>`
@@ -866,8 +1096,15 @@ import {
           })
           .join(``) +
         `</nav>` +
-        renderModal()),
-        (appRoot.dataset.title = value));
+        renderModal() +
+        renderSheet()),
+        (appRoot.dataset.title = value),
+        (appRoot.dataset.tab = viewState.tab));
+      if (viewState.kodesh) {
+        appRoot.querySelectorAll(`[data-write]`).forEach(function (item) {
+          item.disabled = !0;
+        });
+      }
     }
   }
   function addGroceryItem(name, product) {
@@ -944,29 +1181,20 @@ import {
         at: new Date().toISOString(),
       }),
       persistState(`remote`),
-      openModal(
-        `Command sent`,
-        `<p class="m-muted">The frame will ` +
-          escapeHTML(
-            command === `go`
-              ? `open ` + argument
-              : command === `nextPhoto`
-                ? `show the next photo`
-                : command === `screenOff`
-                  ? `turn its screen off`
-                  : command === `screenOn`
-                    ? `turn its screen on`
-                    : `reload`,
-          ) +
-          `.</p>`,
-        [
-          {
-            id: `ok`,
-            label: `Done`,
-            cls: `m-btn--solid`,
-          },
-        ],
-      ));
+      showSimpleToast(`Sent to frame`));
+  }
+  function showSimpleToast(message) {
+    var old = appRoot.querySelector(`.m-toast`);
+    old && old.remove();
+    clearTimeout(viewState.toastTimer);
+    var toast = document.createElement(`div`);
+    toast.className = `m-toast`;
+    toast.setAttribute(`role`, `status`);
+    toast.textContent = message;
+    appRoot.appendChild(toast);
+    viewState.toastTimer = setTimeout(function () {
+      toast.remove();
+    }, 3000);
   }
   function refreshKodeshState() {
     fetch(`/api/zmanim`, {
@@ -1096,9 +1324,107 @@ import {
       ((viewState.held = !1), event.preventDefault());
       return;
     }
-    var value = event.target.closest(`button,[data-grocery-id]`);
+    var value = event.target.closest(`button,[data-grocery-id],[data-sheet-backdrop]`);
     if (value && !isWriteDisabled(value)) {
+      if (value.dataset.sheetClose !== void 0 || (value.dataset.sheetBackdrop !== void 0 && event.target === value))
+        return ((viewState.sheet = null), render());
+      if (value.dataset.openSheet) {
+        viewState.sheet = value.dataset.openSheet;
+        render();
+        if (viewState.sheet === `hidden` && window.HQHidden && window.HQHidden.load) window.HQHidden.load();
+        return;
+      }
       if (value.dataset.tab) return switchTab(value.dataset.tab);
+      if (value.dataset.musicAction) {
+        var musicAction = value.dataset.musicAction;
+        if (musicAction === `connect` || musicAction === `switch`) {
+          viewState.musicStep = `credentials`;
+          viewState.musicError = ``;
+          viewState.sheet = `music-connect`;
+          return render();
+        }
+        if (musicAction === `disconnect`) {
+          musicPost(`/api/music/logout`, {}).then(function () {
+            viewState.musicConnected = !1;
+            viewState.musicProfile = null;
+            viewState.musicList = null;
+            viewState.musicError = ``;
+            render();
+          }).catch(function (error) {
+            viewState.musicError = error.message;
+            render();
+          });
+          return;
+        }
+        if (musicAction === `back`) {
+          viewState.musicList = null;
+          viewState.musicError = ``;
+          return render();
+        }
+        if (musicAction === `play-all`) {
+          var listQueue = (viewState.musicList && viewState.musicList.tiles || []).filter(function (tile) { return tile.kind === `track`; }).map(function (tile) {
+            return { id: tile.id, title: tile.title, artist: tile.subtitle || ``, img: tile.img || `` };
+          });
+          if (listQueue.length) issueMusicCommand(`play`, listQueue, 0, 0);
+          return;
+        }
+        if (musicAction === `toggle`) {
+          var queued = mobileData.music && mobileData.music.queue || [];
+          if (queued.length) issueMusicCommand(mobileData.music.playing ? `pause` : `resume`);
+          return;
+        }
+        if (musicAction === `prev` || musicAction === `next`) {
+          if (mobileData.music && mobileData.music.queue && mobileData.music.queue.length) issueMusicCommand(musicAction);
+          return;
+        }
+      }
+      if (value.dataset.profileId !== void 0) {
+        var profile = viewState.musicProfiles.find(function (item) { return String(item.id) === value.dataset.profileId; });
+        if (profile) selectMusicProfile(profile);
+        return;
+      }
+      if (value.dataset.pinDigit !== void 0) {
+        var digit = value.dataset.pinDigit;
+        if (digit === `clear`) viewState.musicPin = ``;
+        else if (digit === `back`) viewState.musicPin = viewState.musicPin.slice(0, -1);
+        else if (viewState.musicPin.length < 4) viewState.musicPin += digit;
+        if (viewState.musicPin.length === 4) loginMusicProfile(viewState.musicPin);
+        else render();
+        return;
+      }
+      if (value.dataset.musicTarget) {
+        viewState.musicTarget = value.dataset.musicTarget;
+        if (mobileData.music && mobileData.music.queue && mobileData.music.queue.length) {
+          var oldCommand = mobileData.music;
+          issueMusicCommand(oldCommand.playing ? `resume` : `pause`);
+        } else {
+          mobileData.music = Object.assign({}, mobileData.music || {}, { target: viewState.musicTarget });
+          persistState(`music`);
+        }
+        return;
+      }
+      if (value.dataset.musicOpen) {
+        openMusicList(value.dataset.musicKind || `playlist`, value.dataset.musicOpen, value.dataset.title);
+        return;
+      }
+      if (value.dataset.musicTrack !== void 0) {
+        var track = musicTileFromButton(value);
+        if (track.id) issueMusicCommand(`play`, [track], 0, 0);
+        return;
+      }
+      if (value.dataset.musicTrackIndex !== void 0) {
+        var index = Number(value.dataset.musicTrackIndex),
+          tracks = (viewState.musicList && viewState.musicList.tiles || []).filter(function (tile) { return tile.kind === `track`; }).map(function (tile) {
+            return { id: tile.id, title: tile.title, artist: tile.subtitle || ``, img: tile.img || `` };
+          });
+        if (tracks.length) issueMusicCommand(`play`, tracks, index, index);
+        return;
+      }
+      if (value.dataset.musicQueueIndex !== void 0) {
+        var queueIndex = Number(value.dataset.musicQueueIndex);
+        if (mobileData.music && mobileData.music.queue) issueMusicCommand(`play`, mobileData.music.queue, queueIndex, queueIndex);
+        return;
+      }
       if (value.dataset.storeOpen)
         return (
           (viewState.storeId = value.dataset.storeOpen),
@@ -1450,12 +1776,38 @@ import {
     }),
     appRoot.addEventListener(`submit`, function (event) {
       var value = event.target;
-      if ((event.preventDefault(), !viewState.kodesh)) {
-        if (value.dataset.form === `grocery`)
-          addGroceryItem(value.querySelector(`[name="item"]`).value);
-        else if (value.dataset.form === `task`)
-          addTask(value.querySelector(`[name="task"]`).value);
-        else if (value.dataset.form === `store`) {
+      event.preventDefault();
+      if (value.dataset.form === `music-credentials`) {
+          var email = value.querySelector(`[name="musicEmail"]`).value.trim(),
+            password = value.querySelector(`[name="musicPassword"]`).value;
+          viewState.musicEmail = email;
+          viewState.musicPassword = password;
+          viewState.musicError = ``;
+          musicPost(`/api/music/profiles`, { email: email, password: password }).then(function (result) {
+            viewState.musicProfiles = result.profiles || [];
+            if (!viewState.musicProfiles.length) throw new Error(`No profiles found for this account.`);
+            viewState.musicStep = `profiles`;
+            render();
+          }).catch(function (error) {
+            viewState.musicError = error.message;
+            render();
+          });
+      } else if (value.dataset.form === `music-search`) {
+          viewState.musicSearch = value.querySelector(`[name="musicSearch"]`).value.trim();
+          if (!viewState.musicSearch) return;
+          musicPost(`/api/music/search`, { q: viewState.musicSearch }).then(function (result) {
+            viewState.musicList = { kind: `search`, title: `Search results`, tiles: result.tiles || [] };
+            viewState.musicError = ``;
+            render();
+          }).catch(function (error) {
+            viewState.musicError = error.message;
+            render();
+          });
+      } else if (!viewState.kodesh && value.dataset.form === `grocery`)
+        addGroceryItem(value.querySelector(`[name="item"]`).value);
+      else if (!viewState.kodesh && value.dataset.form === `task`)
+        addTask(value.querySelector(`[name="task"]`).value);
+      else if (!viewState.kodesh && value.dataset.form === `store`) {
           var value2 = value.querySelector(`[name="store"]`).value.trim();
           if (!value2) return;
           var id = createId(`s`);
@@ -1466,14 +1818,14 @@ import {
           }),
             (viewState.manageStore = id),
             persistState(`stores`));
-        } else if (value.dataset.form === `category`) {
+      } else if (!viewState.kodesh && value.dataset.form === `category`) {
           var value3 = value.querySelector(`[name="category"]`).value.trim(),
             store = findStore(value.dataset.store);
           value3 &&
             store &&
             !store.cats.includes(value3) &&
             (store.cats.push(value3), persistState(`stores`));
-        } else if (value.dataset.form === `product`) {
+      } else if (!viewState.kodesh && value.dataset.form === `product`) {
           var value4 = value.querySelector(`[name="product"]`).value.trim(),
             store2 = findStore(viewState.manageStore);
           if (!value4 || !store2) return;
@@ -1482,9 +1834,8 @@ import {
             name: value4,
             cat: `Other`,
             store: store2.id,
-          }),
+            }),
             persistState(`products`));
-        }
       }
     }),
     appRoot.addEventListener(`input`, function (event) {
@@ -1492,8 +1843,18 @@ import {
         viewState.query = event.target.value;
         var element = appRoot.querySelector(`#mSuggestions`);
         element && (element.innerHTML = renderProductSuggestions());
+      } else if (event.target.name === `musicSearch`) {
+        viewState.musicSearch = event.target.value;
+      } else if (event.target.matches && event.target.matches(`[data-music-volume]`)) {
+        viewState.musicVolume = Number(event.target.value);
       } else
         event.target.name === `task` && (viewState.query = event.target.value);
+    }),
+    appRoot.addEventListener(`change`, function (event) {
+      if (event.target.matches && event.target.matches(`[data-music-volume]`)) {
+        viewState.musicVolume = Number(event.target.value);
+        issueMusicCommand(`volume`, null, null, viewState.musicVolume);
+      }
     }),
     appRoot.addEventListener(`focusout`, function (event) {
       event.target.hasAttribute(`data-person-name`) &&
@@ -1508,6 +1869,11 @@ import {
         }, 0);
     }),
     window.addEventListener(`fd:auth-required`, render),
+    document.addEventListener(`hq:hidden-updated`, render),
+    document.addEventListener(`hq:shofar-updated`, render),
+    window.addEventListener(`scroll`, function () {
+      appRoot.classList.toggle(`is-scrolled`, window.scrollY > 8);
+    }, { passive: !0 }),
     document.addEventListener(`visibilitychange`, function () {
       document.hidden || (refreshKodeshState(), stateSync.poll());
     }),
@@ -1524,6 +1890,7 @@ import {
   (render(),
     stateSync.loadAll().then(render),
     stateSync.start(),
+    loadMusicStatus(),
     refreshKodeshState(),
     setInterval(refreshKodeshState, 6e4),
     setInterval(expireDoneTasks, 6e4),
