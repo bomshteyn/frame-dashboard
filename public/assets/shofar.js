@@ -282,6 +282,7 @@
         return;
       }
       activeAudio = audio;
+      window.dispatchEvent(new Event("hq:shofar-start"));
       var restored = false;
       function restore() {
         if (restored) return;
@@ -290,6 +291,7 @@
         if (oldVolume !== null && bridge && typeof bridge.setVolume === "function") {
           try { bridge.setVolume(oldVolume); } catch (_) {}
         }
+        window.dispatchEvent(new Event("hq:shofar-end"));
       }
       audio.addEventListener("ended", restore);
       audio.addEventListener("error", restore);

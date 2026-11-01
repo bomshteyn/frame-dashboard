@@ -27,6 +27,10 @@ On the frame, the Photos screen has a **Hide** button, and pressing and holding 
 
 Frames play one long tekiah 15 minutes before candle lighting and again at candle lighting. The tekiah is taken from “4 sjofar tonen.ogg” by Tom A. Fürstenberg (User:Tfursten), from Wikimedia Commons, licensed under [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/); its first tekiah was cut out, its steady middle extended to about 9 seconds, and loudness-normalized.
 
+## Frame music
+
+The frame player uses vendored hls.js **1.5.20** (`public/assets/hls.light.min.js`), loaded on demand for HLS streams. The upstream Apache-2.0 license is in `public/assets/hls.light.LICENSE`.
+
 ## Deploy
 
 ```sh

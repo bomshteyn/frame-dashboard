@@ -24,3 +24,12 @@ test("phone page loads its readable source assets", () => {
   assert.match(html, /href="\/assets\/phone\/phone\.css"/);
   assert.doesNotMatch(html, /mobile-[\w-]+\.(?:js|css)/);
 });
+
+test("frame loads the lazy local music player", () => {
+  const html = readFileSync("public/index.html", "utf8");
+  const player = readFileSync("public/assets/music.js", "utf8");
+  assert.match(html, /src="\/assets\/music\.js\?v=1"/);
+  assert.match(html, /href="\/assets\/music\.css\?v=1"/);
+  assert.doesNotMatch(html, /hls\.light\.min\.js/);
+  assert.match(player, /script\.src = "\/assets\/hls\.light\.min\.js"/);
+});

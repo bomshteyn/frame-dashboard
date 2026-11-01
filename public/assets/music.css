@@ -1,0 +1,108 @@
+.music-chip {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 420px;
+  min-height: 88px;
+  padding: 12px;
+  color: var(--ink, #25231f);
+  background: var(--card);
+  border: 1px solid var(--paper);
+  border-radius: 18px;
+  box-shadow: 0 8px 28px rgb(25 22 18 / 0.2);
+  font: 600 17px/1.2 Archivo, sans-serif;
+}
+
+.music-chip[hidden] {
+  display: none;
+}
+
+.music-chip__cover-wrap {
+  flex: 0 0 64px;
+  width: 64px;
+  height: 64px;
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--paper-2);
+}
+
+.music-chip__cover,
+.music-chip__placeholder {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.music-chip__cover {
+  object-fit: cover;
+}
+
+.music-chip__cover[hidden],
+.music-chip__placeholder[hidden] {
+  display: none;
+}
+
+.music-chip__placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--ink, #25231f);
+}
+
+.music-chip__placeholder .music-chip__icon {
+  width: 28px;
+  height: 28px;
+}
+
+.music-chip__details {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  gap: 5px;
+}
+
+.music-chip__title,
+.music-chip__artist {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-chip__artist {
+  color: var(--ink, #25231f);
+  opacity: 0.68;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.music-chip__button {
+  flex: 0 0 56px;
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  color: var(--ink, #25231f);
+  background: var(--paper-2);
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.music-chip__button:focus-visible {
+  outline: 3px solid var(--alert);
+  outline-offset: 2px;
+}
+
+#screenOff {
+  z-index: 201;
+}
