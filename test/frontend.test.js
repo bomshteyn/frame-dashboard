@@ -28,8 +28,41 @@ test("phone page loads its readable source assets", () => {
 test("frame loads the lazy local music player", () => {
   const html = readFileSync("public/index.html", "utf8");
   const player = readFileSync("public/assets/music.js", "utf8");
-  assert.match(html, /src="\/assets\/music\.js\?v=\d+"/);
+  assert.match(html, /src="\/assets\/music\.js\?v=4"/);
   assert.match(html, /href="\/assets\/music\.css\?v=\d+"/);
   assert.doesNotMatch(html, /hls\.light\.min\.js/);
   assert.match(player, /script\.src = "\/assets\/hls\.light\.min\.js"/);
+});
+
+test("frame music uses a frame-local playback queue and index", () => {
+  const player = readFileSync("public/assets/music.js", "utf8");
+  assert.match(player, /let playQueue = \[\];/);
+  assert.match(player, /function queue\(\) \{\s*return playQueue;\s*\}/);
+  assert.match(player, /const firstLoad = musicVersion === null;/);
+  assert.match(player, /if \(targetMatches && sequence > lastSequence\) \{\s*playQueue = Array\.isArray\(musicState\.queue\) \? musicState\.queue\.slice\(\) : \[\];/);
+  assert.match(player, /const tracks = queue\(\);\s*const index = activeIndex;\s*const track = activeTrack \|\| tracks\[index\] \|\| \{\};/);
+  assert.doesNotMatch(player, /activeIndex = Number\(musicState\.index\)/);
+});
+
+test("phone music follows the selected frame and polls its playback states", () => {
+  const phone = readFileSync("public/assets/phone/app.js", "utf8");
+  assert.match(phone, /function currentMusicNowPlaying\(\) \{\s*var command = mobileData\.music \|\| \{\},\s*target = viewState\.musicTarget \|\| command\.target/);
+  assert.match(phone, /if \(target === `small`\) return small;\s*if \(target === `large`\) return large;/);
+  assert.match(phone, /function pollMusicState\(\)/);
+  assert.match(phone, /\[`music`, `music_now_small`, `music_now_large`\]/);
+  assert.match(phone, /setInterval\(pollMusicState, 5e3\)/);
+  assert.match(phone, /current = state\.id != null \? state : queue\[Number\(command\.index\) \|\| 0\] \|\| \{\}/);
+  assert.match(phone, /typeof state\.playing === `boolean` \? state\.playing : !!command\.playing/);
+  assert.match(phone, /String\(queue\[nowIndex\]\.id\) === String\(nowState\.id\)/);
+});
+
+test("phone music commands write state directly with one conflict retry", () => {
+  const phone = readFileSync("public/assets/phone/app.js", "utf8");
+  assert.match(phone, /async function writeMusicState\(next, isCommand\)/);
+  assert.match(phone, /fetch\(`\/api\/state\/music`, \{ cache: `no-store` \}\)/);
+  assert.match(phone, /method: `PUT`[\s\S]*?body: JSON\.stringify\(\{ json: next, base: Number\(current\.updated\) \|\| 0 \}\)/);
+  assert.match(phone, /if \(response\.status === 409 && attempt === 0\)[\s\S]*?next\.seq = \(Number\(result\.json && result\.json\.seq\) \|\| 0\) \+ 1/);
+  assert.match(phone, /mobileData\.music = next;\s*musicStateVersions\.music = Number\(result\.updated\)/);
+  assert.match(phone, /writeMusicState\(next, !0\)/);
+  assert.doesNotMatch(phone, /persistState\(`music`\)/);
 });

@@ -16,6 +16,7 @@
   let musicState = null;
   let musicVersion = null;
   let nowUpdated = 0;
+  let playQueue = [];
   let activeIndex = 0;
   let activeTrack = null;
   let currentStreamUrl = "";
@@ -71,7 +72,7 @@
   }
 
   function queue() {
-    return Array.isArray(musicState?.queue) ? musicState.queue : [];
+    return playQueue;
   }
 
   function currentTrack() {
@@ -113,7 +114,7 @@
   function renderChip() {
     const tracks = queue();
     chip.hidden = tracks.length === 0 || musicViewActive || chipDismissed;
-    const track = currentTrack() || tracks[Number(musicState?.index) || 0];
+    const track = currentTrack();
     chip.querySelector(".music-chip__title").textContent = track?.title || "24six";
     chip.querySelector(".music-chip__artist").textContent = track?.artist || "";
     const cover = chip.querySelector(".music-chip__cover");
@@ -130,6 +131,7 @@
     const toggle = chip.querySelector("[data-music-toggle]");
     toggle.innerHTML = musicIcon(playerPlaying ? "pause" : "play");
     toggle.setAttribute("aria-label", playerPlaying ? "Pause" : "Play");
+    renderMusicPlayer();
   }
 
   function stopEvent(event) {
@@ -377,7 +379,7 @@
         reportNowPlaying();
       });
     } else {
-      loadAndPlay(Number(musicState?.index) || activeIndex);
+      loadAndPlay(activeIndex);
     }
   }
 
@@ -432,22 +434,27 @@
       const stateResponse = await fetch("/api/state/music", { cache: "no-store" });
       if (!stateResponse.ok) return;
       const stateResult = await stateResponse.json();
+      const firstLoad = musicVersion === null;
       musicVersion = Number(stateResult.updated) || nextVersion;
       musicState = stateResult.json && typeof stateResult.json === "object" ? stateResult.json : null;
       if (!musicState) {
         renderChip();
         return;
       }
-      activeIndex = Number(musicState.index) || 0;
-      activeTrack = queue()[activeIndex] || null;
-      renderChip();
       const targetMatches = musicState.target === "both" || musicState.target === frameLabel;
       const sequence = Number(musicState.seq) || 0;
       const lastSequence = Number(safeStorageGet(sequenceKey)) || 0;
       if (targetMatches && sequence > lastSequence) {
+        playQueue = Array.isArray(musicState.queue) ? musicState.queue.slice() : [];
         safeStorageSet(sequenceKey, sequence);
         applyCommand(musicState);
+      } else if (firstLoad && targetMatches && playQueue.length === 0) {
+        playQueue = Array.isArray(musicState.queue) ? musicState.queue.slice() : [];
+        const sharedIndex = Number(musicState.index);
+        activeIndex = Number.isInteger(sharedIndex) && sharedIndex >= 0 ? sharedIndex : 0;
+        activeTrack = playQueue[activeIndex] || null;
       }
+      renderChip();
     } catch (_) {}
   }
 
@@ -572,9 +579,9 @@
   function renderMusicPlayer() {
     const root = musicViewState.root?.querySelector("[data-music-view-player]");
     if (!root) return;
-    const tracks = Array.isArray(musicState?.queue) ? musicState.queue : [];
-    const index = Number(musicState?.index) || activeIndex;
-    const track = tracks[index] || activeTrack || {};
+    const tracks = queue();
+    const index = activeIndex;
+    const track = activeTrack || tracks[index] || {};
     const cover = track.img
       ? `<img class="music-view-art" src="${musicViewEscape(track.img)}" alt="" draggable="false">`
       : `<div class="music-view-art music-view-placeholder">${musicViewIcon("note")}</div>`;
@@ -667,9 +674,10 @@
     try {
       let response = await fetch("/api/state/music", { cache: "no-store" });
       let current = await response.json();
+      const nextQueue = Array.isArray(commandQueue) ? commandQueue.slice() : [];
       const next = {
         target: frameLabel,
-        queue: commandQueue,
+        queue: nextQueue,
         index,
         playing: command === "pause" || command === "stop" ? false : command === "volume" ? !!musicState?.playing : true,
         volume: command === "volume" ? Number(argument) : Number(musicState?.volume ?? 70),
@@ -693,6 +701,7 @@
         musicState = next;
         musicVersion = Number(result.updated) || musicVersion;
         safeStorageSet(sequenceKey, next.seq);
+        playQueue = nextQueue.slice();
         applyCommand(next);
         renderMusicPlayer();
         return;
@@ -740,10 +749,10 @@
         const tracks = (musicViewState.detail?.tiles || []).filter((tile) => tile.kind === "track").map((tile) => ({ id: tile.id, title: tile.title, artist: tile.subtitle, img: tile.img }));
         if (tracks.length) return persistMusicCommand(tracks, Number(button.dataset.viewDetailTrack));
       }
-      if (button.dataset.playerAction === "toggle") return persistMusicCommand(musicState?.queue || [], Number(musicState?.index) || 0, playerPlaying ? "pause" : "resume");
-      if (button.dataset.playerAction === "next") return persistMusicCommand(musicState?.queue || [], Number(musicState?.index) || 0, "next");
-      if (button.dataset.playerAction === "prev") return persistMusicCommand(musicState?.queue || [], Number(musicState?.index) || 0, "prev");
-      if (button.dataset.playerQueue != null) return persistMusicCommand(musicState?.queue || [], Number(button.dataset.playerQueue), "play", Number(button.dataset.playerQueue));
+      if (button.dataset.playerAction === "toggle") return persistMusicCommand(queue(), activeIndex, playerPlaying ? "pause" : "resume");
+      if (button.dataset.playerAction === "next") return persistMusicCommand(queue(), activeIndex, "next");
+      if (button.dataset.playerAction === "prev") return persistMusicCommand(queue(), activeIndex, "prev");
+      if (button.dataset.playerQueue != null) return persistMusicCommand(queue(), Number(button.dataset.playerQueue), "play", Number(button.dataset.playerQueue));
     });
     element.addEventListener("submit", (event) => {
       if (!event.target.matches("[data-music-search]")) return;
@@ -754,10 +763,14 @@
     element.addEventListener("input", (event) => {
       if (event.target.matches("[data-player-volume]")) {
         setVolume(event.target.value);
-        persistMusicCommand(musicState?.queue || [], Number(musicState?.index) || 0, "volume", Number(event.target.value));
       }
       if (event.target.matches("[data-music-seek]") && audio.duration) {
         audio.currentTime = audio.duration * Number(event.target.value) / 100;
+      }
+    });
+    element.addEventListener("change", (event) => {
+      if (event.target.matches("[data-player-volume]")) {
+        persistMusicCommand(queue(), activeIndex, "volume", Number(event.target.value));
       }
     });
     element.addEventListener("scroll", (event) => {

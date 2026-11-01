@@ -58,6 +58,9 @@ import {
         ((viewState.heartbeat = value), render());
       },
     });
+  var musicStateVersions = {},
+    musicStatePolling = !1,
+    musicCommandSequence = 0;
   window.FD_PHONE = {
     data: mobileData,
     stateSync: stateSync,
@@ -151,6 +154,48 @@ import {
   }
   function persistState(key) {
     (stateSync.persist(key), render());
+  }
+  async function writeMusicState(next, isCommand) {
+    var response,
+      result,
+      current;
+    try {
+      response = await fetch(`/api/state/music`, { cache: `no-store` });
+      current = await response.json().catch(function () { return {}; });
+      if (!response.ok) {
+        throw new Error(response.status === 423 ? `Controls are disabled during Kodesh.` : `Could not send command to frame.`);
+      }
+      var currentSequence = Number(current.json && current.json.seq) || 0;
+      if (isCommand && (Number(next.seq) || 0) <= currentSequence) next.seq = currentSequence + 1;
+      musicCommandSequence = Math.max(musicCommandSequence, currentSequence, Number(next.seq) || 0);
+      for (var attempt = 0; attempt < 2; attempt += 1) {
+        response = await fetch(`/api/state/music`, {
+          method: `PUT`,
+          cache: `no-store`,
+          headers: { "content-type": `application/json` },
+          body: JSON.stringify({ json: next, base: Number(current.updated) || 0 }),
+        });
+        result = await response.json().catch(function () { return {}; });
+        if (response.status === 409 && attempt === 0) {
+          current = result;
+          next.seq = (Number(result.json && result.json.seq) || 0) + 1;
+          musicCommandSequence = Math.max(musicCommandSequence, next.seq);
+          continue;
+        }
+        if (!response.ok) {
+          throw new Error(response.status === 423 ? `Controls are disabled during Kodesh.` : response.status === 409 ? `Playback changed. Try again.` : `Could not send command to frame.`);
+        }
+        mobileData.music = next;
+        musicStateVersions.music = Number(result.updated) || Number(current.updated) || 0;
+        musicCommandSequence = Math.max(musicCommandSequence, Number(next.seq) || 0);
+        viewState.musicError = ``;
+        render();
+        return;
+      }
+    } catch (error) {
+      viewState.musicError = error.message || `Could not send command to frame.`;
+      render();
+    }
   }
   function showTaskCompletedToast(task) {
     var element = appRoot.querySelector(`.m-toast`);
@@ -765,9 +810,60 @@ import {
       render();
     });
   }
+  function musicNowState(key) {
+    var state = mobileData[key];
+    if (state && state.json && typeof state.json === `object`) return state.json;
+    return state && typeof state === `object` ? state : {};
+  }
   function currentMusicNowPlaying() {
-    var state = mobileData.music_now_small || mobileData.music_now_large || {};
-    return state.json || state;
+    var command = mobileData.music || {},
+      target = viewState.musicTarget || command.target,
+      small = musicNowState(`music_now_small`),
+      large = musicNowState(`music_now_large`);
+    if (target === `small`) return small;
+    if (target === `large`) return large;
+    if (small.playing) return small;
+    if (large.playing) return large;
+    return (Date.parse(large.at || ``) || 0) > (Date.parse(small.at || ``) || 0) ? large : small;
+  }
+  function pollMusicState() {
+    if (document.hidden || musicStatePolling) return;
+    musicStatePolling = !0;
+    fetch(`/api/state/version`, { cache: `no-store` })
+      .then(function (response) {
+        if (!response.ok) throw new Error(`State versions unavailable`);
+        return response.json();
+      })
+      .then(function (versions) {
+        var stateVersions = versions.keys || versions,
+          changed = !1;
+        return Promise.all([`music`, `music_now_small`, `music_now_large`].map(function (key) {
+          var updated = Number(stateVersions[key]) || 0;
+          if (updated === Number(musicStateVersions[key] || 0)) return null;
+          return fetch(`/api/state/` + encodeURIComponent(key), { cache: `no-store` })
+            .then(function (response) {
+              if (!response.ok) throw new Error(`Music state unavailable`);
+              return response.json();
+            })
+            .then(function (result) {
+              musicStateVersions[key] = Number(result.updated) || updated;
+              mobileData[key] = result.json && typeof result.json === `object` ? result.json : null;
+              if (key === `music`) musicCommandSequence = Math.max(musicCommandSequence, Number(mobileData.music && mobileData.music.seq) || 0);
+              changed = !0;
+            });
+        })).then(function () {
+          if (!changed) return;
+          var command = mobileData.music || {};
+          if ([`small`, `large`, `both`].indexOf(command.target) >= 0) viewState.musicTarget = command.target;
+          if (command.volume != null && Number.isFinite(Number(command.volume))) viewState.musicVolume = Number(command.volume);
+          viewState.musicNowPlaying = currentMusicNowPlaying();
+          if (viewState.tab === `music`) render();
+        });
+      })
+      .catch(function () {})
+      .finally(function () {
+        musicStatePolling = !1;
+      });
   }
   function renderMusicTile(tile) {
     var id = escapeHTML(tile.id),
@@ -788,14 +884,15 @@ import {
     var state = currentMusicNowPlaying(),
       command = mobileData.music || {},
       queue = Array.isArray(command.queue) ? command.queue : [],
-      current = queue[Number(command.index) || 0] || state,
-      title = current.title || state.title || `Nothing playing`,
-      artist = current.artist || state.artist || ``,
-      img = current.img || state.img || ``,
+      current = state.id != null ? state : queue[Number(command.index) || 0] || {},
+      title = current.title || `Nothing playing`,
+      artist = current.artist || ``,
+      img = current.img || ``,
+      playing = typeof state.playing === `boolean` ? state.playing : !!command.playing,
       disabled = viewState.kodesh ? ` disabled` : ``;
     return `<section class="m-music-now"><div class="m-music-now-art">` +
       (img ? `<img src="` + escapeHTML(img) + `" alt="">` : phoneIcon(`music`, 30)) +
-      `</div><div class="m-music-now-copy"><small>NOW PLAYING</small><strong>` + escapeHTML(title) + `</strong><span>` + escapeHTML(artist) + `</span></div><div class="m-music-controls"><button type="button" data-write data-music-action="prev" aria-label="Previous track"` + disabled + `>` + phoneIcon(`skip-back`) + `</button><button type="button" class="m-music-play" data-write data-music-action="toggle" aria-label="Play or pause"` + disabled + `>` + phoneIcon(command.playing ? `pause` : `play`) + `</button><button type="button" data-write data-music-action="next" aria-label="Next track"` + disabled + `>` + phoneIcon(`skip-forward`) + `</button></div><div class="m-music-target" role="group" aria-label="Play on"><button type="button" data-write data-music-target="small" class="` + (viewState.musicTarget === `small` ? `is-on` : ``) + `"` + disabled + `>10″</button><button type="button" data-write data-music-target="large" class="` + (viewState.musicTarget === `large` ? `is-on` : ``) + `"` + disabled + `>15″</button><button type="button" data-write data-music-target="both" class="` + (viewState.musicTarget === `both` ? `is-on` : ``) + `"` + disabled + `>Both</button></div><label class="m-music-volume"><span>Volume</span><input type="range" min="0" max="100" value="` + Number(viewState.musicVolume) + `" data-write data-music-volume aria-label="Volume"` + disabled + `></label></section>`;
+      `</div><div class="m-music-now-copy"><small>NOW PLAYING</small><strong>` + escapeHTML(title) + `</strong><span>` + escapeHTML(artist) + `</span></div><div class="m-music-controls"><button type="button" data-write data-music-action="prev" aria-label="Previous track"` + disabled + `>` + phoneIcon(`skip-back`) + `</button><button type="button" class="m-music-play" data-write data-music-action="toggle" aria-label="Play or pause"` + disabled + `>` + phoneIcon(playing ? `pause` : `play`) + `</button><button type="button" data-write data-music-action="next" aria-label="Next track"` + disabled + `>` + phoneIcon(`skip-forward`) + `</button></div><div class="m-music-target" role="group" aria-label="Play on"><button type="button" data-write data-music-target="small" class="` + (viewState.musicTarget === `small` ? `is-on` : ``) + `"` + disabled + `>10″</button><button type="button" data-write data-music-target="large" class="` + (viewState.musicTarget === `large` ? `is-on` : ``) + `"` + disabled + `>15″</button><button type="button" data-write data-music-target="both" class="` + (viewState.musicTarget === `both` ? `is-on` : ``) + `"` + disabled + `>Both</button></div><label class="m-music-volume"><span>Volume</span><input type="range" min="0" max="100" value="` + Number(viewState.musicVolume) + `" data-write data-music-volume aria-label="Volume"` + disabled + `></label></section>`;
   }
   function renderMusicList() {
     var list = viewState.musicList;
@@ -806,10 +903,15 @@ import {
   }
   function renderMusicQueue() {
     var command = mobileData.music || {},
-      queue = Array.isArray(command.queue) ? command.queue : [];
+      queue = Array.isArray(command.queue) ? command.queue : [],
+      nowState = currentMusicNowPlaying(),
+      nowIndex = Number(nowState.index),
+      currentIndex = nowState.id != null && Number.isInteger(nowIndex) && queue[nowIndex] && String(queue[nowIndex].id) === String(nowState.id)
+        ? nowIndex
+        : Number(command.index) || 0;
     if (!queue.length) return ``;
     return `<section class="m-music-queue"><div class="m-shelf-heading"><h2>Up next</h2><span>` + queue.length + ` tracks</span></div>` + queue.map(function (track, index) {
-      return `<button type="button" class="m-music-track` + (index === Number(command.index) ? ` is-current` : ``) + `" data-write data-music-queue-index="` + index + `"` + (viewState.kodesh ? ` disabled` : ``) + `><span class="m-track-number">` + (index === Number(command.index) ? phoneIcon(`music`, 16) : index + 1) + `</span><span><strong>` + escapeHTML(track.title || `Untitled`) + `</strong><small>` + escapeHTML(track.artist || ``) + `</small></span>` + phoneIcon(`chevron`, 16) + `</button>`;
+      return `<button type="button" class="m-music-track` + (index === currentIndex ? ` is-current` : ``) + `" data-write data-music-queue-index="` + index + `"` + (viewState.kodesh ? ` disabled` : ``) + `><span class="m-track-number">` + (index === currentIndex ? phoneIcon(`music`, 16) : index + 1) + `</span><span><strong>` + escapeHTML(track.title || `Untitled`) + `</strong><small>` + escapeHTML(track.artist || ``) + `</small></span>` + phoneIcon(`chevron`, 16) + `</button>`;
     }).join(``) + `</section>`;
   }
   function loadMusicBrowse(tab, page) {
@@ -915,19 +1017,21 @@ import {
     });
   }
   function issueMusicCommand(command, queue, index, extra) {
-    var current = mobileData.music || {};
-    mobileData.music = Object.assign({}, current, {
-      target: viewState.musicTarget || `small`,
-      queue: queue || current.queue || [],
-      index: index == null ? Number(current.index) || 0 : index,
-      playing: command === `pause` || command === `stop` ? !1 : command === `volume` || command === `seek` ? !!current.playing : !0,
-      volume: Number(viewState.musicVolume),
-      seq: (Number(current.seq) || 0) + 1,
-      cmd: command,
-      arg: extra == null ? `` : extra,
-      at: new Date().toISOString(),
-    });
-    persistState(`music`);
+    var current = mobileData.music || {},
+      next = Object.assign({}, current, {
+        target: viewState.musicTarget || `small`,
+        queue: queue || current.queue || [],
+        index: index == null ? Number(current.index) || 0 : index,
+        playing: command === `pause` || command === `stop` ? !1 : command === `volume` || command === `seek` ? !!current.playing : !0,
+        volume: Number(viewState.musicVolume),
+        seq: Math.max(musicCommandSequence, Number(current.seq) || 0) + 1,
+        cmd: command,
+        arg: extra == null ? `` : extra,
+        at: new Date().toISOString(),
+      });
+    musicCommandSequence = Number(next.seq) || musicCommandSequence;
+    mobileData.music = next;
+    writeMusicState(next, !0);
   }
   function musicTileFromButton(button) {
     return {
@@ -1469,7 +1573,7 @@ import {
           issueMusicCommand(oldCommand.playing ? `resume` : `pause`);
         } else {
           mobileData.music = Object.assign({}, mobileData.music || {}, { target: viewState.musicTarget });
-          persistState(`music`);
+          writeMusicState(mobileData.music);
         }
         return;
       }
@@ -1945,7 +2049,7 @@ import {
       appRoot.classList.toggle(`is-scrolled`, window.scrollY > 8);
     }, { passive: !0 }),
     document.addEventListener(`visibilitychange`, function () {
-      document.hidden || (refreshKodeshState(), stateSync.poll());
+      document.hidden || (refreshKodeshState(), stateSync.poll(), pollMusicState());
     }),
     window.addEventListener(`fd:editing-disabled`, function () {
       ((viewState.kodesh = !0), render());
@@ -1961,6 +2065,8 @@ import {
     stateSync.loadAll().then(render),
     stateSync.start(),
     loadMusicStatus(),
+    pollMusicState(),
+    setInterval(pollMusicState, 5e3),
     refreshKodeshState(),
     setInterval(refreshKodeshState, 6e4),
     setInterval(expireDoneTasks, 6e4),
