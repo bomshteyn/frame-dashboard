@@ -239,6 +239,50 @@ test("home groups section arrays and search serializes type arrays", async () =>
   assert.equal(formBody.get("limit"), "50");
 });
 
+test("catalog browse routes use exact upstream URLs and preserve pagination data", async () => {
+  const { DB, env, cookie } = await authenticated();
+  DB.sqlite.prepare("INSERT INTO music_auth (id, token, device_id, updated) VALUES (1, ?, ?, ?)")
+    .run("valid-token", "00000000-0000-4000-8000-000000000006", Date.now());
+  const kinds = ["artist", "collection", "playlist", "category"];
+  for (const kind of kinds) {
+    const raw = {
+      data: [{ id: 90, type: kind, title: `Featured ${kind}` }],
+      pagination: { current_page: 2, last_page: 3 }
+    };
+    const response = await withFetch(async (url) => {
+      assert.equal(
+        String(url),
+        `https://24six.app/api/v3/music/${kind}?page=2&per_page=40&sort=popular&keyword=Jazz+fusion&category_id=9`
+      );
+      return upstreamResponse(raw);
+    }, () => worker.fetch(apiRequest(
+      `/api/music/browse/${kind}?page=2&sort=popular&keyword=Jazz%20fusion&category_id=9&debug=1`,
+      { cookie }
+    ), env));
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      tiles: [{ id: 90, kind, title: `Featured ${kind}`, subtitle: "", img: "", length: null }],
+      page: 2,
+      hasMore: true,
+      raw
+    });
+  }
+});
+
+test("category detail uses the music/category upstream route", async () => {
+  const { DB, env, cookie } = await authenticated();
+  DB.sqlite.prepare("INSERT INTO music_auth (id, token, device_id, updated) VALUES (1, ?, ?, ?)")
+    .run("valid-token", "00000000-0000-4000-8000-000000000007", Date.now());
+  const response = await withFetch(async (url) => {
+    assert.equal(String(url), "https://24six.app/api/v3/music/category/17");
+    return upstreamResponse({ tracks: [{ id: 7, type: "music", title: "Song" }] });
+  }, () => worker.fetch(apiRequest("/api/music/list/category/17", { cookie }), env));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    tiles: [{ id: 7, kind: "track", title: "Song", subtitle: "", img: "", length: null }]
+  });
+});
+
 test("music upstream errors preserve the message and status", async () => {
   const { DB, env, cookie } = await authenticated();
   DB.sqlite.prepare("INSERT INTO music_auth (id, token, device_id, updated) VALUES (1, ?, ?, ?)")
@@ -266,9 +310,14 @@ test("no /api/music route responds with 401 when unauthenticated", async () => {
     ["GET", "/api/music/home"],
     ["POST", "/api/music/search"],
     ["GET", "/api/music/library"],
+    ["GET", "/api/music/browse/artist"],
+    ["GET", "/api/music/browse/collection"],
+    ["GET", "/api/music/browse/playlist"],
+    ["GET", "/api/music/browse/category"],
     ["GET", "/api/music/list/playlist/1"],
     ["GET", "/api/music/list/collection/1"],
     ["GET", "/api/music/list/artist/1"],
+    ["GET", "/api/music/list/category/1"],
     ["GET", "/api/music/recent"],
     ["GET", "/api/music/stream/1"],
     ["POST", "/api/music/log"]

@@ -1136,7 +1136,32 @@ async function musicRoute(request, env, url) {
     if (result.error) return result.error;
     return json(musicDebug(url, result.payload, { tiles: musicTiles(result.payload) }));
   }
-  const listMatch = /^\/api\/music\/list\/(playlist|collection|artist)\/([^/]+)$/.exec(pathname);
+  const browseMatch = /^\/api\/music\/browse\/(artist|collection|playlist|category)$/.exec(pathname);
+  if (browseMatch && method === "GET") {
+    const page = Math.max(1, Number(url.searchParams.get("page")) || 1);
+    const params = new URLSearchParams({
+      page: String(page),
+      per_page: "40"
+    });
+    for (const key of ["sort", "keyword", "category_id"]) {
+      const value = url.searchParams.get(key);
+      if (value !== null && value !== "") params.set(key, value);
+    }
+    const result = await browseRequest(`music/${browseMatch[1]}?${params}`);
+    if (result.error) return result.error;
+    const tiles = musicTiles(result.payload);
+    const metadata = result.payload?.pagination ?? result.payload?.meta ?? result.payload;
+    const currentPage = Number(metadata?.current_page ?? metadata?.page ?? page);
+    const lastPage = Number(metadata?.last_page ?? metadata?.total_pages ?? metadata?.pages);
+    const total = Number(metadata?.total ?? metadata?.total_count);
+    const hasMore = Number.isFinite(lastPage) && lastPage > 0
+      ? currentPage < lastPage
+      : Number.isFinite(total) && total >= 0
+        ? currentPage * 40 < total
+        : tiles.length >= 40;
+    return json(musicDebug(url, result.payload, { tiles, page, hasMore }));
+  }
+  const listMatch = /^\/api\/music\/list\/(playlist|collection|artist|category)\/([^/]+)$/.exec(pathname);
   if (listMatch && method === "GET") {
     let id;
     try {
