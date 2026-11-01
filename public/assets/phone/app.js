@@ -41,6 +41,10 @@ import {
       musicSections: [],
       musicLibrary: [],
       musicRecent: [],
+      musicBrowseTab: ``,
+      musicBrowseTiles: [],
+      musicBrowsePage: 1,
+      musicBrowseHasMore: !1,
       musicNowPlaying: null,
       musicTarget: `small`,
       musicVolume: 70,
@@ -785,6 +789,39 @@ import {
       return `<button type="button" class="m-music-track` + (index === Number(command.index) ? ` is-current` : ``) + `" data-write data-music-queue-index="` + index + `"` + (viewState.kodesh ? ` disabled` : ``) + `><span class="m-track-number">` + (index === Number(command.index) ? `♪` : index + 1) + `</span><span><strong>` + escapeHTML(track.title || `Untitled`) + `</strong><small>` + escapeHTML(track.artist || ``) + `</small></span><span aria-hidden="true">›</span></button>`;
     }).join(``) + `</section>`;
   }
+  function loadMusicBrowse(tab, page) {
+    viewState.musicBrowseTab = tab;
+    viewState.musicBrowsePage = page || 1;
+    musicApi(`/api/music/browse/` + encodeURIComponent(tab) + `?page=` + viewState.musicBrowsePage).then(function (result) {
+      viewState.musicBrowseTiles = viewState.musicBrowsePage > 1
+        ? viewState.musicBrowseTiles.concat(result.tiles || [])
+        : result.tiles || [];
+      viewState.musicBrowseHasMore = !!result.hasMore;
+      viewState.musicError = ``;
+      render();
+    }).catch(function (error) {
+      viewState.musicError = error.message;
+      render();
+    });
+  }
+  function renderMusicBrowse() {
+    var tabs = [
+      [`artist`, `Artists`],
+      [`collection`, `Albums`],
+      [`playlist`, `Playlists`],
+      [`category`, `Categories`],
+    ];
+    return `<section class="m-music-browse"><div class="m-music-browse-tabs" role="tablist" aria-label="Browse 24six">` +
+      tabs.map(function (item) {
+        return `<button type="button" role="tab" aria-selected="` + (viewState.musicBrowseTab === item[0]) + `" class="` + (viewState.musicBrowseTab === item[0] ? `is-active` : ``) + `" data-music-browse-tab="` + item[0] + `">` + item[1] + `</button>`;
+      }).join(``) +
+      `</div>` +
+      (viewState.musicBrowseTab
+        ? `<div class="m-music-browse-grid">` + viewState.musicBrowseTiles.map(renderMusicTile).join(``) + `</div>` +
+          (viewState.musicBrowseHasMore ? `<button type="button" class="m-btn m-music-more" data-music-more>Load more</button>` : ``)
+        : `<p class="m-muted m-music-browse-hint">Browse artists, albums, playlists and categories.</p>`) +
+      `</section>`;
+  }
   function renderMusic() {
     if (viewState.musicConnected === null) return `<div class="m-empty">Loading 24six…</div>`;
     if (!viewState.musicConnected) return `<section class="m-music-connect-card"><span class="m-music-mark">♪</span><h2 class="serif">Music for home</h2><p class="m-muted">Connect your 24six account to browse and play on your frames.</p><button type="button" class="m-btn m-btn--solid" data-write data-music-action="connect"` + (viewState.kodesh ? ` disabled` : ``) + `>Connect 24six</button>` + (viewState.musicError ? `<p class="m-music-error">` + escapeHTML(viewState.musicError) + `</p>` : ``) + `</section>`;
@@ -792,12 +829,14 @@ import {
     return renderMusicNowCard() +
       renderMusicQueue() +
       `<form class="m-form m-music-search" data-form="music-search"><input class="m-input" name="musicSearch" type="search" placeholder="Search 24six" aria-label="Search 24six" value="` + escapeHTML(viewState.musicSearch) + `"><button type="submit" class="m-btn">Search</button></form>` +
+      renderMusicBrowse() +
+      (viewState.musicBrowseTab ? `` :
       (viewState.musicError ? `<p class="m-music-error">` + escapeHTML(viewState.musicError) + `</p>` : ``) +
       renderMusicShelf(`Your library`, viewState.musicLibrary) +
       renderMusicShelf(`Recently played`, viewState.musicRecent) +
       viewState.musicSections.map(function (section) {
         return renderMusicShelf(section.title, section.tiles);
-      }).join(``) +
+      }).join(``)) +
       `<section class="m-music-account"><div><strong>` + escapeHTML(viewState.musicProfile && viewState.musicProfile.name || `24six account`) + `</strong><small>Connected to 24six</small></div><button type="button" data-write data-music-action="switch"` + (viewState.kodesh ? ` disabled` : ``) + `>Switch profile</button><button type="button" data-write data-music-action="disconnect"` + (viewState.kodesh ? ` disabled` : ``) + `>Disconnect</button></section>`;
   }
   function renderMusicConnect() {
@@ -1328,6 +1367,15 @@ import {
     if (value && !isWriteDisabled(value)) {
       if (value.dataset.sheetClose !== void 0 || (value.dataset.sheetBackdrop !== void 0 && event.target === value))
         return ((viewState.sheet = null), render());
+      if (value.dataset.musicBrowseTab) {
+        viewState.musicList = null;
+        loadMusicBrowse(value.dataset.musicBrowseTab, 1);
+        return;
+      }
+      if (value.hasAttribute(`data-music-more`)) {
+        loadMusicBrowse(viewState.musicBrowseTab, viewState.musicBrowsePage + 1);
+        return;
+      }
       if (value.dataset.openSheet) {
         viewState.sheet = value.dataset.openSheet;
         render();

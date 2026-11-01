@@ -645,6 +645,7 @@ body {
   --accent: #e0457b;
   --accent-ink: #ae2459;
   --accent-wash: rgba(224, 69, 123, 0.12);
+  --music-accent: #0f6f68;
   box-sizing: border-box;
   width: 100%;
   max-width: 600px;
@@ -1604,4 +1605,50 @@ body {
   .m-music-cover-placeholder {
     height: 116px;
   }
+}
+.m-music-browse {
+  margin: 22px 0;
+}
+.m-music-browse-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  margin: 0 -2px 12px;
+  padding: 2px 2px 8px;
+  scrollbar-width: none;
+}
+.m-music-browse-tabs::-webkit-scrollbar {
+  display: none;
+}
+.m-music-browse-tabs button {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--phone-line);
+  border-radius: 999px;
+  color: var(--phone-ink);
+  background: var(--phone-card);
+  font: 600 13px/1.2 Archivo, sans-serif;
+}
+.m-music-browse-tabs button.is-active {
+  border-color: var(--music-accent);
+  color: #fff;
+  background: var(--music-accent);
+}
+.m-music-browse-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  justify-items: start;
+  gap: 12px 8px;
+}
+.m-music-browse-grid .m-music-tile {
+  width: min(100%, 148px);
+}
+.m-music-browse-hint {
+  margin: 6px 0 0;
+}
+.m-music-more {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 12px;
 }
