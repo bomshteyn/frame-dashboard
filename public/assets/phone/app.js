@@ -3,7 +3,8 @@ import {
   n as filterExpiredTasks,
   r as sortTasks,
   t as formatDueLabel,
-} from "../auto-update-nlFnScvE.js";
+} from "../auto-update-ed4535f0ea.js";
+import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
 (function () {
   var mobileData = window.DATA,
     appRoot = document.getElementById(`mApp`),
@@ -828,14 +829,10 @@ import {
     if (large.playing) return large;
     return (Date.parse(large.at || ``) || 0) > (Date.parse(small.at || ``) || 0) ? large : small;
   }
-  function pollMusicState() {
+  function pollMusicState(versions) {
     if (document.hidden || musicStatePolling) return;
     musicStatePolling = !0;
-    fetch(`/api/state/version`, { cache: `no-store` })
-      .then(function (response) {
-        if (!response.ok) throw new Error(`State versions unavailable`);
-        return response.json();
-      })
+    (versions ? Promise.resolve(versions) : readStateVersions())
       .then(function (versions) {
         var stateVersions = versions.keys || versions,
           changed = !1;
@@ -2130,7 +2127,7 @@ import {
       appRoot.classList.toggle(`is-scrolled`, window.scrollY > 8);
     }, { passive: !0 }),
     document.addEventListener(`visibilitychange`, function () {
-      document.hidden || (refreshKodeshState(), stateSync.poll(), pollMusicState());
+      document.hidden || refreshKodeshState();
     }),
     window.addEventListener(`fd:editing-disabled`, function () {
       ((viewState.kodesh = !0), render());
@@ -2146,8 +2143,7 @@ import {
     stateSync.loadAll().then(render),
     stateSync.start(),
     loadMusicStatus(),
-    pollMusicState(),
-    setInterval(pollMusicState, 5e3),
+    subscribeStateVersions(pollMusicState, { pauseWhenHidden: !0 }),
     refreshKodeshState(),
     setInterval(refreshKodeshState, 6e4),
     setInterval(expireDoneTasks, 6e4),

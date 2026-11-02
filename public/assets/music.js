@@ -1,3 +1,5 @@
+import { subscribeStateVersions } from "./state-poll.js";
+
 (function () {
   const stage = document.getElementById("stage");
   if (!stage) return;
@@ -28,7 +30,8 @@
   let musicViewActive = false;
   let chipDismissed = false;
   let retryUsed = false;
-  let pollTimer = 0;
+  let musicStatePolling = false;
+  let lastNowReport = 0;
   let hlsLoading = null;
 
   function musicIcon(name) {
@@ -172,6 +175,7 @@
   });
 
   function reportNowPlaying() {
+    lastNowReport = Date.now();
     const track = currentTrack();
     const value = {
       id: track?.id ?? null,
@@ -442,11 +446,10 @@
     }
   }
 
-  async function updateMusicState() {
+  async function updateMusicState(versions) {
+    if (musicStatePolling) return;
+    musicStatePolling = true;
     try {
-      const versionsResponse = await fetch("/api/state/version", { cache: "no-store" });
-      if (!versionsResponse.ok) return;
-      const versions = await versionsResponse.json();
       const nextVersion = Number(versions.music) || 0;
       if (nextVersion === musicVersion) return;
       const stateResponse = await fetch("/api/state/music", { cache: "no-store" });
@@ -473,16 +476,10 @@
         activeTrack = playQueue[activeIndex] || null;
       }
       renderChip();
-    } catch (_) {}
-  }
-
-  function schedulePoll() {
-    clearTimeout(pollTimer);
-    const queuedOrPlaying = queue().length > 0 || playerPlaying;
-    pollTimer = setTimeout(async () => {
-      await updateMusicState();
-      schedulePoll();
-    }, queuedOrPlaying ? 2000 : 5000);
+    } catch (_) {
+    } finally {
+      musicStatePolling = false;
+    }
   }
 
   audio.addEventListener("ended", () => {
@@ -863,13 +860,13 @@
   }
 
   loadNowVersion().then(() => {
-    updateMusicState().finally(schedulePoll);
+    subscribeStateVersions(updateMusicState);
   });
   setInterval(() => {
     if (playerPlaying && isKodeshActive()) {
       playbackError = "Playback is paused during Shabbat/Yom Tov";
       stopPlayback();
-    } else if (playerPlaying) {
+    } else if (playerPlaying && Date.now() - lastNowReport >= 30000) {
       reportNowPlaying();
     }
   }, 5000);
