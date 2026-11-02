@@ -20,7 +20,7 @@ test("weather day click handler is bound once per view", () => {
 
 test("phone page loads its readable source assets", () => {
   const html = readFileSync("public/m.html", "utf8");
-  assert.match(html, /src="\/assets\/phone\/app\.js"/);
+  assert.match(html, /src="\/assets\/phone\/app\.js\?v=2"/);
   assert.match(html, /href="\/assets\/phone\/phone\.css"/);
   assert.doesNotMatch(html, /mobile-[\w-]+\.(?:js|css)/);
 });
@@ -28,7 +28,7 @@ test("phone page loads its readable source assets", () => {
 test("frame loads the lazy local music player", () => {
   const html = readFileSync("public/index.html", "utf8");
   const player = readFileSync("public/assets/music.js", "utf8");
-  assert.match(html, /src="\/assets\/music\.js\?v=6"/);
+  assert.match(html, /src="\/assets\/music\.js\?v=7"/);
   assert.match(html, /href="\/assets\/music\.css\?v=5"/);
   assert.match(html, /href="\/assets\/music-view\.css\?v=2"/);
   assert.doesNotMatch(html, /hls\.light\.min\.js/);
@@ -64,9 +64,9 @@ test("phone music follows the selected frame and polls its playback states", () 
   const phone = readFileSync("public/assets/phone/app.js", "utf8");
   assert.match(phone, /function currentMusicNowPlaying\(\) \{\s*var command = mobileData\.music \|\| \{\},\s*target = viewState\.musicTarget \|\| command\.target/);
   assert.match(phone, /if \(target === `small`\) return small;\s*if \(target === `large`\) return large;/);
-  assert.match(phone, /function pollMusicState\(\)/);
+  assert.match(phone, /function pollMusicState\(versions\)/);
   assert.match(phone, /\[`music`, `music_now_small`, `music_now_large`\]/);
-  assert.match(phone, /setInterval\(pollMusicState, 5e3\)/);
+  assert.match(phone, /subscribeStateVersions\(pollMusicState, \{ pauseWhenHidden: !0 \}\)/);
   assert.match(phone, /current = state\.id != null \? state : queue\[Number\(command\.index\) \|\| 0\] \|\| \{\}/);
   assert.match(phone, /typeof state\.playing === `boolean` \? state\.playing : !!command\.playing/);
   assert.match(phone, /String\(queue\[nowIndex\]\.id\) === String\(nowState\.id\)/);

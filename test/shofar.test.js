@@ -8,7 +8,7 @@ const context = {
   window: {},
   document: { getElementById: () => null },
 };
-vm.runInNewContext(source, context, { filename: "public/assets/shofar.js" });
+vm.runInNewContext(source.replace(/^import[^\n]+\n/, ""), context, { filename: "public/assets/shofar.js" });
 const due = context.window.HQShofar.due;
 
 const start = "2026-10-02T22:00:00.000Z";

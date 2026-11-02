@@ -9,6 +9,12 @@ Family dashboard for the Android photo frames: Cloudflare Worker + D1 + static a
 
 The frontend in `public/assets` is the built output recovered from the live deploy; its source was not recovered.
 
+## State polling
+
+State sync, music and shofar share one `/api/state/version` request per page every 10 seconds through `public/assets/state-poll.js`. The phone pauses polling while hidden; frames keep listening for remote commands. Failed polls back off up to 60 seconds.
+
+This caps version checks at 8,640 per continuously connected frame per day, excluding heartbeats, changed-state reads and other APIs. Music reports playback progress every 30 seconds while playing, with immediate reports for playback actions. Remote commands can take up to one polling interval to arrive under normal network conditions.
+
 ## Photo batches
 
 The scheduled scan indexes the shared album into `album_photo` every 12 h. `photo_seen` remembers when each photo was first indexed and when it was last sent to a frame.

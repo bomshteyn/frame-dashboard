@@ -1,3 +1,5 @@
+import { subscribeStateVersions } from "./state-poll.js";
+
 (function () {
   var DEFAULTS = { on: true, volume: 70, test: 0 };
   var SETTING_URL = "/api/state/shofar";
@@ -372,16 +374,14 @@
         loaded = true;
       });
     }
-    function checkVersion() {
-      fetchJson("/api/state/version", { cache: "no-store" }).then(function (versions) {
-        var next = Number(versions.shofar) || 0;
-        if (next !== updated) loadSetting();
-      }).catch(function () {});
+    function checkVersion(versions) {
+      var next = Number(versions.shofar) || 0;
+      if (next !== updated) loadSetting();
     }
 
     loadSetting();
     setInterval(tick, 10000);
-    setInterval(checkVersion, 60000);
+    subscribeStateVersions(checkVersion);
   }
 
   if (document.getElementById("mApp")) return phone();
