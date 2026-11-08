@@ -2,13 +2,20 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
-import worker, { zmanimData, scanAlbum, materializeChores, compareState, buildKodeshWindows } from "../worker/index.js";
+import worker, { zmanimData, scanAlbum, materializeChores, compareState, buildKodeshWindows, encryptPin, decryptPin } from "../worker/index.js";
+
+function applyPinMigration(sqlite) {
+  if (sqlite.prepare("SELECT name FROM pragma_table_info('household') WHERE name = 'pin_enc'").get()) return false;
+  sqlite.exec(readFileSync(new URL("../migrations/0005_household_pin.sql", import.meta.url), "utf8"));
+  return true;
+}
 
 function setup() {
   const sqlite = new DatabaseSync(":memory:");
   for (const f of ["0000_initial", "0001_photo_seen", "0002_photo_hidden", "0003_music", "0004_households"]) {
     sqlite.exec(readFileSync(new URL(`../migrations/${f}.sql`, import.meta.url), "utf8"));
   }
+  applyPinMigration(sqlite);
   const stmt = (sql, args = []) => ({
     sql, args,
     bind: (...values) => stmt(sql, values),
@@ -207,7 +214,7 @@ test("admin listing, rename and PIN rotation never expose stored hashes", async 
   assert.equal((await api("/api/admin/households/2", admin, "PATCH", { name: "New name" })).status, 200);
   const list = await (await api("/api/admin/households", admin)).json();
   assert.equal(list[1].name, "New name");
-  assert.deepEqual(Object.keys(list[1]).sort(), ["created", "heartbeat", "id", "name"]);
+  assert.deepEqual(Object.keys(list[1]).sort(), ["created", "heartbeat", "id", "name", "pin"]);
   const rotated = await (await api("/api/admin/households/2/pin", admin, "POST", {})).json();
   assert.match(rotated.pin, /^\d{8}$/);
   assert.match(await login(rotated.pin), /^fd_s=h2\./);
@@ -260,6 +267,67 @@ test("admin lists only each family's own heartbeat, including families without f
   sqlite.prepare("INSERT INTO state VALUES ('heartbeat', '{}', 123), ('h2:heartbeat', '{}', 456)").run();
   list = await (await api("/api/admin/households", admin)).json();
   assert.deepEqual(list.map(f => [f.id, f.heartbeat]), [[1, 123], [2, 456]]);
+});
+
+test("PIN encryption uses random IVs, round trips and rejects tampering or a different key", async () => {
+  const secret = "a".repeat(64), pin = "01234567";
+  const encrypted = await encryptPin(secret, pin);
+  assert.notEqual(encrypted, await encryptPin(secret, pin));
+  assert.equal(Buffer.from(encrypted, "base64").length, 12 + pin.length + 16);
+  assert.equal(await decryptPin(secret, encrypted), pin);
+  assert.equal(await decryptPin(secret, null), null);
+  assert.equal(await decryptPin(secret, undefined), null);
+  await assert.rejects(decryptPin("b".repeat(64), encrypted));
+  const tampered = Buffer.from(encrypted, "base64");
+  tampered[12] ^= 1;
+  await assert.rejects(decryptPin(secret, tampered.toString("base64")));
+  await assert.rejects(decryptPin(secret, "invalid"));
+  await assert.rejects(encryptPin("invalid", pin));
+});
+
+test("admin lists recoverable PINs, keeps legacy PINs null and encrypts resets without changing hash login", async () => {
+  const { api, env, sqlite, owner, admin, friend, login } = await pair();
+  const list = await (await api("/api/admin/households", admin)).json();
+  assert.equal(list[0].pin, env.FAMILY_PIN);
+  assert.match(list[1].pin, /^\d{8}$/);
+  const before = sqlite.prepare("SELECT pin_enc, pin_hash FROM household WHERE id=2").get();
+  assert.equal(await decryptPin(env.SESSION_SECRET, before.pin_enc), list[1].pin);
+  assert.ok(!before.pin_enc.includes(list[1].pin));
+  assert.equal((await api("/api/admin/households", owner)).status, 403);
+  assert.equal((await api("/api/admin/households", friend)).status, 403);
+  assert.equal((await api("/api/admin/households")).status, 401);
+  assert.ok(!Object.hasOwn(await (await api("/api/household", friend)).json(), "pin"));
+  assert.ok(!Object.hasOwn(await (await api("/api/settings", friend)).json(), "pin"));
+  sqlite.exec("UPDATE household SET pin_enc=NULL WHERE id=2");
+  assert.equal((await (await api("/api/admin/households", admin)).json())[1].pin, null);
+  await login(list[1].pin);
+  const reset = await (await api("/api/admin/households/2/pin", admin, "POST", {})).json();
+  const after = sqlite.prepare("SELECT pin_enc, pin_hash FROM household WHERE id=2").get();
+  assert.notEqual(after.pin_enc, before.pin_enc);
+  assert.equal(await decryptPin(env.SESSION_SECRET, after.pin_enc), reset.pin);
+  assert.equal((await (await api("/api/admin/households", admin)).json())[1].pin, reset.pin);
+  await login(reset.pin);
+  sqlite.exec("UPDATE household SET pin_enc='invalid' WHERE id=2");
+  const corrupt = await api("/api/admin/households", admin);
+  assert.equal(corrupt.status, 502);
+  assert.deepEqual(await corrupt.json(), { error: "Admin request failed" });
+});
+
+test("guarded migration reapplication preserves existing household fields and encrypted PINs", async () => {
+  const { sqlite } = setup();
+  const values = { settings: '{"test":true}', pin: await encryptPin("a".repeat(64), "12345678") };
+  sqlite.prepare("UPDATE household SET settings=?, pin_enc=? WHERE id=1").run(values.settings, values.pin);
+  const before = sqlite.prepare("SELECT * FROM household").all();
+  assert.equal(applyPinMigration(sqlite), false);
+  assert.equal(applyPinMigration(sqlite), false);
+  assert.deepEqual(sqlite.prepare("SELECT * FROM household").all(), before);
+  const fresh = new DatabaseSync(":memory:");
+  fresh.exec(readFileSync(new URL("../migrations/0000_initial.sql", import.meta.url), "utf8"));
+  fresh.exec(readFileSync(new URL("../migrations/0003_music.sql", import.meta.url), "utf8"));
+  fresh.exec(readFileSync(new URL("../migrations/0004_households.sql", import.meta.url), "utf8"));
+  assert.equal(applyPinMigration(fresh), true);
+  assert.equal(applyPinMigration(fresh), false);
+  assert.equal(fresh.prepare("SELECT pin_enc FROM household WHERE id=1").get().pin_enc, null);
 });
 
 test("HTML bootstrap uses the household or anonymous defaults and escapes script markup", async () => {

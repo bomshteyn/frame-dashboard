@@ -24,4 +24,6 @@ button:disabled { opacity: .55; cursor: wait; }
 .pin { font-size: 32px; letter-spacing: 4px; }
 fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 article .actions { margin-top: 18px; }
+.pin-controls { margin-bottom: 18px; }
+.setup-label { margin-top: 18px; }
 @media (max-width: 500px) { main { margin: 24px auto; padding: 0 16px; } section, article { padding: 20px; } }

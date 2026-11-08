@@ -103,7 +103,12 @@ async function adminRoute(request, env, url) {
   const match = /^\/api\/admin\/households(?:\/(\d+)(\/pin)?)?$/.exec(url.pathname);
   if (!match) return json({ error: "Not found" }, 404);
   const id = Number(match[1]);
-  if (!id && request.method === "GET") return json((await env.DB.prepare("SELECT h.id, h.name, h.created, s.updated AS heartbeat FROM household h LEFT JOIN state s ON s.key = CASE WHEN h.id = 1 THEN 'heartbeat' ELSE 'h' || h.id || ':heartbeat' END ORDER BY h.id").all()).results);
+  if (!id && request.method === "GET") {
+    const rows = (await env.DB.prepare("SELECT h.id, h.name, h.created, h.pin_enc, s.updated AS heartbeat FROM household h LEFT JOIN state s ON s.key = CASE WHEN h.id = 1 THEN 'heartbeat' ELSE 'h' || h.id || ':heartbeat' END ORDER BY h.id").all()).results;
+    return json(await Promise.all(rows.map(async ({ pin_enc, ...row }) => ({
+      ...row, pin: row.id === 1 ? env.FAMILY_PIN || null : await decryptPin(env.SESSION_SECRET, pin_enc)
+    }))));
+  }
   const body = ["POST", "PATCH"].includes(request.method) ? await request.json().catch(() => null) : null;
   if ((!id && request.method === "POST") || (id && !match[2] && request.method === "PATCH")) {
     if (typeof body?.name !== "string" || !body.name.trim() || body.name.length > 100) return json({ error: "Name required" }, 400);
@@ -119,9 +124,10 @@ async function adminRoute(request, env, url) {
       pin = String(10000000 + n % 90000000);
       hash = await sessionSignature(env.SESSION_SECRET, "pin:" + pin);
     } while (!hash || pin === env.FAMILY_PIN || await env.DB.prepare("SELECT id FROM household WHERE pin_hash = ?").bind(hash).first());
-    if (id) await env.DB.prepare("UPDATE household SET pin_hash = ? WHERE id = ?").bind(hash, id).run();
+    const encrypted = await encryptPin(env.SESSION_SECRET, pin);
+    if (id) await env.DB.prepare("UPDATE household SET pin_hash = ?, pin_enc = ? WHERE id = ?").bind(hash, encrypted, id).run();
     else {
-      const row = await env.DB.prepare("INSERT INTO household (name, pin_hash, created) VALUES (?, ?, ?) RETURNING id").bind(body.name.trim(), hash, Date.now()).first();
+      const row = await env.DB.prepare("INSERT INTO household (name, pin_hash, pin_enc, created) VALUES (?, ?, ?, ?) RETURNING id").bind(body.name.trim(), hash, encrypted, Date.now()).first();
       return json({ id: row.id, pin }, 201);
     }
     return json({ id, pin });
@@ -966,6 +972,26 @@ function sessionSecretBytes(secret) {
   if (typeof secret !== "string" || !/^[a-f\d]{64}$/i.test(secret)) return null;
   return Uint8Array.from(secret.match(/.{2}/g), (byte) => parseInt(byte, 16));
 }
+async function pinKey(secret) {
+  const bytes = sessionSecretBytes(secret);
+  if (!bytes) throw new Error("Invalid encryption key");
+  const key = await crypto.subtle.importKey("raw", bytes, "HKDF", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt: enc.encode("frame-dashboard"),
+    info: enc.encode("household-pin:v1") }, key, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+}
+async function encryptPin(secret, pin) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await pinKey(secret), enc.encode(pin)));
+  const data = new Uint8Array(iv.length + ciphertext.length);
+  data.set(iv); data.set(ciphertext, iv.length);
+  return btoa(String.fromCharCode(...data));
+}
+async function decryptPin(secret, encrypted) {
+  if (encrypted == null) return null;
+  const data = Uint8Array.from(atob(encrypted), (c) => c.charCodeAt(0));
+  const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: data.slice(0, 12) }, await pinKey(secret), data.slice(12));
+  return new TextDecoder().decode(plaintext);
+}
 async function sessionSignature(secret, expires) {
   const bytes = sessionSecretBytes(secret);
   if (!bytes) return null;
@@ -1660,6 +1686,8 @@ var index_default = {
   }
 };
 export {
+  encryptPin,
+  decryptPin,
   buildKodeshWindows,
   materializeChores,
   compareState,

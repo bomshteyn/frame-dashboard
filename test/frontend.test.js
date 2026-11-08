@@ -109,7 +109,7 @@ test("phone page loads its readable source assets", () => {
 
 test("standalone admin and frame repeat controls use separate readable assets", () => {
   const admin = readFileSync(new URL("../public/admin.html", import.meta.url), "utf8");
-  assert.match(admin, /assets\/admin\/admin.js\?v=1/);
+  assert.match(admin, /assets\/admin\/admin.js\?v=2/);
   const main = asset("main-");
   assert.ok(main.includes("data-repeat-list"));
   assert.ok(main.includes("data-repeat-add"));
