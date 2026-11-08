@@ -67,7 +67,7 @@ test("legacy cookies still identify household 1; new PIN login and admin isolati
     ["/api/admin/households/2/pin", "POST", {}],
     ["/api/admin/households/2", "PATCH", { name: "Other" }],
     ["/api/admin/households/2", "DELETE"]
-  ]) assert.equal((await api(path, friend, method, body)).status, 401);
+  ]) assert.equal((await api(path, friend, method, body)).status, 403);
   assert.equal((await api("/api/household", friend.replace("h2.", "h1."))).status, 401);
   assert.equal((await api("/api/music/status")).status, 403);
 });
@@ -216,8 +216,11 @@ test("admin listing, rename and PIN rotation never expose stored hashes", async 
 
 test("admin authentication is separate, bounded, domain-separated and optional", async () => {
   const { api, env, sqlite, owner, friend, admin } = await pair();
-  for (const cookie of ["", owner, friend, admin.replace("fd_a=", "fd_s="), admin + "bad"]) {
+  for (const cookie of ["", admin.replace("fd_a=", "fd_s="), admin + "bad"]) {
     assert.equal((await api("/api/admin/households", cookie)).status, 401);
+  }
+  for (const cookie of [owner, friend]) {
+    for (const path of ["/api/admin", "/api/admin/households"]) assert.equal((await api(path, cookie)).status, 403);
   }
   assert.equal((await api("/api/household", admin)).status, 401);
   const expires = Math.floor(Date.now() / 1000) + 3600;

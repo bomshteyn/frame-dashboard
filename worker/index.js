@@ -95,7 +95,7 @@ async function householdRoute(request, env, url) {
 async function adminRoute(request, env, url) {
   if (!env.ADMIN_PASSWORD || !sessionSecretBytes(env.SESSION_SECRET)) return json({ error: "Admin not configured" }, 503);
   if (url.pathname === "/api/admin/login" && request.method === "POST") return login(request, env, true);
-  if (!await adminSession(request, env)) return json({ error: "Authentication required" }, 401);
+  if (!await adminSession(request, env)) return json({ error: env.household ? "Forbidden" : "Authentication required" }, env.household ? 403 : 401);
   if (url.pathname === "/api/admin/logout" && request.method === "POST") {
     return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json", "cache-control": "no-store",
       "set-cookie": "fd_a=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0" } });
@@ -1566,7 +1566,7 @@ var index_default = {
       return html("/m.html");
     }
     if ((url.pathname === "/admin" || url.pathname === "/admin/") && env.ASSETS) return html("/admin.html");
-    if (url.pathname.startsWith("/api/admin/")) {
+    if (url.pathname === "/api/admin" || url.pathname.startsWith("/api/admin/")) {
       try { return await adminRoute(request, env, url); }
       catch (_) { return json({ error: "Admin request failed" }, 502); }
     }
