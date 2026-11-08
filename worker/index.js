@@ -13,7 +13,7 @@ var ZMANIM = [
   ["sunset", "Shkia"],
   ["tzeit7083deg", "Tzeis"]
 ];
-var STATE_KEYS = new Set(["tasks", "groceries", "photos-favs", "stores", "products", "people", "remote", "heartbeat", "shofar", "music", "music_now_small", "music_now_large"]);
+var STATE_KEYS = new Set(["tasks", "chores", "groceries", "photos-favs", "stores", "products", "people", "remote", "heartbeat", "shofar", "music", "music_now_small", "music_now_large"]);
 var SESSION_SECONDS = 365 * 24 * 60 * 60;
 var LOGIN_WINDOW_MS = 15 * 60 * 1e3;
 var LOGIN_MAX_FAILURES = 5;
@@ -1385,8 +1385,56 @@ async function musicRoute(request, env, url) {
   }
   return json({ error: "Not found" }, 404);
 }
+function validChores(value) {
+  return Array.isArray(value) && value.length <= 200 && new Set(value.map((c) => c?.id)).size === value.length && value.every((c) =>
+    c && typeof c.id === "string" && c.id.length > 0 && c.id.length <= 100 &&
+    typeof c.title === "string" && c.title.trim().length > 0 && c.title.length <= 200 &&
+    (c.who == null || typeof c.who === "string") && Array.isArray(c.days) &&
+    c.days.every((d) => Number.isInteger(d) && d >= 0 && d <= 6) &&
+    typeof c.erevShabbos === "boolean" && typeof c.erevYomTov === "boolean");
+}
+async function compareState(db, key, value, base, now = Date.now()) {
+  const updated = Math.max(now, base + 1);
+  return db.prepare(
+    "INSERT INTO state (key, json, updated) SELECT ?, ?, ? WHERE ? = 0 OR EXISTS (SELECT 1 FROM state WHERE key = ? AND updated = ?) ON CONFLICT(key) DO UPDATE SET json = excluded.json, updated = excluded.updated WHERE state.updated = ? RETURNING updated"
+  ).bind(key, JSON.stringify(value), updated, base, key, base, base).first();
+}
+async function materializeChores(env, now = Date.now(), fixtureWindows) {
+  const clock = arguments.length > 1 ? () => now : () => Date.now();
+  const hid = env.household.id, tz = env.household.settings.location.tz;
+  const date = dateString(dateParts(new Date(now), tz));
+  const day = new Date(date + "T12:00:00Z").getUTCDay();
+  let windows = fixtureWindows;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const definitions = await env.DB.prepare("SELECT json FROM state WHERE key = ?").bind(ns(hid, "chores")).first();
+    const chores = definitions ? JSON.parse(definitions.json) : [];
+    if (!validChores(chores) || !chores.length) return;
+    if (!windows) windows = (await zmanimData(fetch, env.household.settings)).windows;
+    if (isKodeshWindowActive(windows, now)) return;
+    const due = chores.filter((c) => c.days.includes(day) || windows.some((w) =>
+      new Date(w.start).getTime() > now && dateString(dateParts(new Date(w.start), tz)) === date &&
+      (w.yomtov ? c.erevYomTov : c.erevShabbos)));
+    if (!due.length) return;
+    const key = ns(hid, "tasks");
+    const current = await env.DB.prepare("SELECT json, updated FROM state WHERE key = ?").bind(key).first();
+    let tasks = current ? JSON.parse(current.json) : [];
+    if (!Array.isArray(tasks)) return;
+    const missing = due.filter((c) => !tasks.some((t) => t.choreId === c.id && t.occurrence === date));
+    if (!missing.length) return;
+    tasks = tasks.filter((t) => !missing.some((c) => t.choreId === c.id));
+    tasks.push(...missing.map((c) => ({
+      id: "chore:" + c.id + ":" + date, title: c.title, who: c.who || null,
+      due: date, done: false, doneAt: null, created: new Date(now).toISOString(), choreId: c.id, occurrence: date
+    })));
+    const at = clock();
+    if (dateString(dateParts(new Date(at), tz)) !== date || isKodeshWindowActive(windows, at)) return;
+    if (await compareState(env.DB, key, tasks, Number(current?.updated || 0), now)) return;
+  }
+}
 async function state(request, env, key) {
   if (!STATE_KEYS.has(key)) return json({ error: "Unknown state key" }, 404);
+  const name = key;
+  if (request.method === "GET" && key === "tasks") await materializeChores(env);
   key = ns(env.household.id, key);
   if (request.method === "GET") {
     const row = await env.DB.prepare("SELECT json, updated FROM state WHERE key = ?").bind(key).first();
@@ -1409,22 +1457,25 @@ async function state(request, env, key) {
   if (!payload || !Object.prototype.hasOwnProperty.call(payload, "json") || !Number.isSafeInteger(payload.base) || payload.base < 0) {
     return json({ error: "Expected { json, base }" }, 400);
   }
+  if (name === "chores" && !validChores(payload.json)) return json({ error: "Invalid repeating chores" }, 400);
   const current = await env.DB.prepare("SELECT json, updated FROM state WHERE key = ?").bind(key).first();
   const currentUpdated = Number(current?.updated || 0);
   if (Number(payload.base) !== currentUpdated) {
     return json({ json: current ? JSON.parse(current.json) : null, updated: currentUpdated }, 409);
   }
-  const updated = Math.max(Date.now(), currentUpdated + 1);
-  await env.DB.prepare(
-    "INSERT INTO state (key, json, updated) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET json = excluded.json, updated = excluded.updated"
-  ).bind(key, JSON.stringify(payload.json), updated).run();
-  return json({ json: payload.json, updated });
+  const saved = await compareState(env.DB, key, payload.json, currentUpdated);
+  if (!saved) {
+    const latest = await env.DB.prepare("SELECT json, updated FROM state WHERE key = ?").bind(key).first();
+    return json({ json: latest ? JSON.parse(latest.json) : null, updated: latest?.updated || 0 }, 409);
+  }
+  return json({ json: payload.json, updated: saved.updated });
 }
 var index_default = {
   async scheduled(event, env) {
     const rows = await env.DB.prepare("SELECT id FROM household").all();
     await Promise.all(rows.results.map(async (row) => {
       const h = await loadHousehold(env, row.id);
+      await materializeChores({ ...env, household: h });
       await Promise.all(["main", "shabbat"].map((album) => {
         const url = albumShareUrl({ ...env, household: h }, album);
         return url ? scanAlbum(env.DB, ns(h.id, album), url, fetch, Date.now(), h.settings.location.tz) : null;
@@ -1439,7 +1490,7 @@ var index_default = {
     const html = async (path) => {
       const response = await env.ASSETS.fetch(new Request(new URL(path, request.url), request));
       const settings = household?.settings || householdSettings({}, {}, 0);
-      const fd = JSON.stringify({ tz: settings.location.tz, city: settings.location.name, admin: household?.id === 1, minyanimUrl: settings.minyanimUrl }).replaceAll("<", "\\u003c");
+      const fd = JSON.stringify({ hid: household?.id || 0, tz: settings.location.tz, city: settings.location.name, admin: household?.id === 1, minyanimUrl: settings.minyanimUrl }).replaceAll("<", "\\u003c");
       const transformed = new HTMLRewriter().on("head", { element(element) { element.append(`<script>window.FD=${fd}</script>`, { html: true }); } }).transform(response);
       const result = new Response(transformed.body, transformed);
       result.headers.set("cache-control", "private, no-store");
@@ -1542,6 +1593,8 @@ var index_default = {
 };
 export {
   buildKodeshWindows,
+  materializeChores,
+  compareState,
   constantTimeEqual,
   index_default as default,
   expandCalendar,

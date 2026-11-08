@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
-import worker, { zmanimData, scanAlbum } from "../worker/index.js";
+import worker, { zmanimData, scanAlbum, materializeChores, compareState, buildKodeshWindows } from "../worker/index.js";
 
 function setup() {
   const sqlite = new DatabaseSync(":memory:");
@@ -172,6 +172,7 @@ test("writes and editing locks use household state, photos and location", async 
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM photo_hidden").get().n, 0);
     locked = true;
     assert.equal((await api("/api/state/groceries", friend, "PUT", { json: [], base: 0 })).status, 423);
+    assert.equal((await api("/api/state/chores", friend, "PUT", { json: [], base: 0 })).status, 423);
     assert.equal((await api("/api/photos/hide", friend, "POST", photo)).status, 423);
   } finally { globalThis.fetch = original; }
 });
@@ -250,4 +251,94 @@ test("album scanning uses exact namespaced keys, never another household's scan"
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM album_scan WHERE album = 'h2:main'").get().n, 1);
   const settings = await (await api("/api/settings", owner)).json();
   assert.equal(settings.minyanimUrl, "https://torontominyanim.com/");
+});
+
+function chore(id, options = {}) {
+  return { id, title: "Set the table", who: "alex", days: [], erevShabbos: false, erevYomTov: false, ...options };
+}
+function choreContext() {
+  const context = setup();
+  context.env.household = { id: 2, settings: { location: { tz: "Asia/Jerusalem" } } };
+  context.put = (key, value, updated = 1) => context.sqlite.prepare("INSERT OR REPLACE INTO state VALUES (?, ?, ?)").run(key, JSON.stringify(value), updated);
+  context.read = (key) => {
+    const row = context.sqlite.prepare("SELECT * FROM state WHERE key = ?").get(key);
+    return row ? { json: JSON.parse(row.json), updated: row.updated } : null;
+  };
+  return context;
+}
+test("weekday chores use household date, dedupe completed tasks and replace older occurrences", async () => {
+  const { env, put, read } = choreContext();
+  put("h2:chores", [chore("weekly", { days: [0] }), chore("monday", { days: [1] })]);
+  put("tasks", [{ id: "owner" }]);
+  const now = Date.parse("2026-11-07T22:30:00Z"); // Sunday in Jerusalem, Saturday in UTC.
+  await materializeChores(env, now, []);
+  const first = read("h2:tasks");
+  assert.equal(first.json.length, 1);
+  assert.equal(first.json[0].occurrence, "2026-11-08");
+  assert.equal(first.json[0].due, "2026-11-08");
+  first.json[0].done = true;
+  put("h2:tasks", first.json, first.updated + 1);
+  await Promise.all([materializeChores(env, now + 1000, []), materializeChores(env, now + 1000, [])]);
+  assert.equal(read("h2:tasks").json.length, 1);
+  assert.equal(read("h2:tasks").json[0].done, true);
+  await materializeChores(env, now + 7 * 86400000, []);
+  assert.equal(read("h2:tasks").json.length, 1);
+  assert.equal(read("h2:tasks").json[0].occurrence, "2026-11-15");
+  assert.equal(read("h2:tasks").json[0].done, false);
+  assert.deepEqual(read("tasks").json, [{ id: "owner" }]);
+});
+test("erev chores follow built candle-lighting windows and never materialize during kodesh", async () => {
+  const { env, put, read } = choreContext();
+  put("h2:chores", [chore("shabbat", { erevShabbos: true }), chore("holiday", { erevYomTov: true })]);
+  const windows = buildKodeshWindows([
+    { category: "candles", date: "2026-11-06T16:00:00+02:00" },
+    { category: "havdalah", date: "2026-11-07T18:00:00+02:00" },
+    { category: "candles", date: "2026-11-08T16:00:00+02:00" },
+    { category: "holiday", date: "2026-11-09T08:00:00+02:00", yomtov: true, title: "Yom Tov" },
+    { category: "havdalah", date: "2026-11-09T18:00:00+02:00" }
+  ]);
+  await materializeChores(env, Date.parse("2026-11-05T22:01:00Z"), windows);
+  assert.deepEqual(read("h2:tasks").json.map((t) => t.choreId), ["shabbat"]);
+  const before = read("h2:tasks");
+  put("h2:chores", [chore("saturday", { days: [6] })]);
+  await materializeChores(env, Date.parse("2026-11-07T08:00:00Z"), windows);
+  assert.deepEqual(read("h2:tasks"), before);
+  put("h2:chores", [chore("shabbat", { erevShabbos: true }), chore("holiday", { erevYomTov: true })]);
+  await materializeChores(env, Date.parse("2026-11-08T08:00:00Z"), windows);
+  assert.deepEqual(read("h2:tasks").json.map((t) => t.choreId), ["shabbat", "holiday"]);
+});
+test("empty and unscheduled chores do not create tasks; concurrent materializers and edits use CAS", async () => {
+  const { env, put, read } = choreContext();
+  await materializeChores(env, Date.parse("2026-11-08T08:00:00Z"), []);
+  assert.equal(read("h2:tasks"), null);
+  put("h2:chores", [chore("disabled")]);
+  await materializeChores(env, Date.parse("2026-11-08T08:00:00Z"), []);
+  assert.equal(read("h2:tasks"), null);
+  put("h2:chores", [chore("sunday", { days: [0] })]);
+  await Promise.all([materializeChores(env, Date.parse("2026-11-08T08:00:00Z"), []), materializeChores(env, Date.parse("2026-11-08T08:00:00Z"), [])]);
+  const current = read("h2:tasks");
+  assert.equal(current.json.length, 1);
+  assert.equal(await compareState(env.DB, "h2:tasks", [], 0), null);
+  assert.deepEqual(read("h2:tasks"), current);
+  await compareState(env.DB, "h2:tasks", current.json.concat([{ id: "manual" }]), current.updated);
+  assert.equal(await compareState(env.DB, "h2:tasks", [], current.updated), null);
+  assert.equal(read("h2:tasks").json.length, 2);
+});
+
+test("chores API validates definitions, versions writes and isolates households", async () => {
+  const { api, owner, friend } = await pair();
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ times: {}, items: [] }));
+  try {
+    for (const value of [null, {}, [chore("bad", { days: [7] })], [chore("bad", { title: "" })], [chore("same"), chore("same")]]) {
+      assert.equal((await api("/api/state/chores", friend, "PUT", { json: value, base: 0 })).status, 400);
+    }
+    const result = await api("/api/state/chores", friend, "PUT", { json: [chore("weekly")], base: 0 });
+    assert.equal(result.status, 200);
+    const saved = await result.json();
+    assert.equal((await api("/api/state/chores", friend, "PUT", { json: [], base: 0 })).status, 409);
+    assert.equal((await (await api("/api/state/chores", owner)).json()).json, null);
+    assert.deepEqual((await (await api("/api/state/chores", friend)).json()).json, saved.json);
+    assert.equal((await (await api("/api/state/version", friend)).json()).chores, saved.updated);
+  } finally { globalThis.fetch = original; }
 });

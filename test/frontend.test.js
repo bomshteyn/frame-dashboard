@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
+import vm from "node:vm";
 
 const asset = (prefix) => {
   const name = readdirSync("public/assets").find((f) => f.startsWith(prefix) && f.endsWith(".js"));
@@ -16,6 +17,35 @@ test("new grocery and task ids are unique across reloads", () => {
 
 test("weather day click handler is bound once per view", () => {
   assert.match(asset("main-"), /e\._wxDays\|\|\(e\._wxDays=!0,e\.addEventListener\(`click`/);
+});
+
+test("new household bootstrap excludes demo groceries while owner defaults remain unchanged", () => {
+  const shared = asset("auto-update-");
+  const source = shared.slice(shared.indexOf("window.CONFIG="), shared.indexOf("function f(e){return e&&typeof"));
+  const bootstrap = (hid) => {
+    const window = { FD: { hid } };
+    vm.runInNewContext(source, { window, fetch: async () => ({ ok: true, json: async () => [] }) });
+    return window.DATA;
+  };
+  const owner = bootstrap(1), friend = bootstrap(2);
+  assert.equal(owner.groceries.filter((g) => !g.done).length, 21);
+  assert.equal(friend.groceries.length, 0);
+  assert.equal(friend.tasks.length, 0);
+  assert.equal(friend.products.length, 0);
+  assert.equal(friend.catalog.length, 0);
+  assert.equal(friend.usuals.length, 0);
+  assert.equal(friend.stores[0].name, "Shopping");
+  assert.equal(friend.people[0].name, "Parent 1");
+});
+
+test("completed chore tasks remain visible through the household day including DST fallback", () => {
+  const shared = asset("auto-update-");
+  const source = shared.slice(shared.indexOf("function w(e,t)"), shared.indexOf("var T=/"));
+  const filter = new Function("window", "b", "return (" + source + ")")({ FD: { tz: "America/Toronto" } }, 86400000);
+  const chore = { choreId: "weekly", occurrence: "2026-11-01", done: true, doneAt: "2026-11-01T04:01:00Z" };
+  assert.equal(filter([chore], new Date("2026-11-02T04:30:00Z")).length, 1);
+  assert.equal(filter([chore], new Date("2026-11-02T05:01:00Z")).length, 0);
+  assert.equal(filter([{ done: true, doneAt: chore.doneAt }], new Date("2026-11-02T04:30:00Z")).length, 0);
 });
 
 test("household surfaces use injected location and dynamic havdalah without changing default markup", () => {
@@ -54,8 +84,8 @@ test("Shabbat havdalah rendering preserves legacy rows and supports custom opini
 
 test("phone page loads its readable source assets", () => {
   const html = readFileSync("public/m.html", "utf8");
-  assert.match(html, /src="\/assets\/phone\/app\.js\?v=3"/);
-  assert.match(html, /href="\/assets\/phone\/phone\.css\?v=2"/);
+  assert.match(html, /src="\/assets\/phone\/app\.js\?v=4"/);
+  assert.match(html, /href="\/assets\/phone\/phone\.css\?v=3"/);
   assert.doesNotMatch(html, /mobile-[\w-]+\.(?:js|css)/);
 });
 

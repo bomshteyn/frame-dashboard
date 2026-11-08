@@ -3,7 +3,7 @@ import {
   n as filterExpiredTasks,
   r as sortTasks,
   t as formatDueLabel,
-} from "../auto-update-35c06243f5.js";
+} from "../auto-update-afa7efbf6f.js";
 import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
 (function () {
   var mobileData = window.DATA,
@@ -113,7 +113,7 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     var result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Request failed. Please try again.");
+    if (!response.ok) throw new Error(result.error || (response.status === 409 ? "Changed on another device. Review and try again." : "Request failed. Please try again."));
     return result;
   }
   async function openSettings() {
@@ -536,7 +536,7 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
           `><span class="m-task-check">` +
           (isDone ? `✓` : ``) +
           `</span><span class="m-task-copy"><strong>` +
-          escapeHTML(task.title) +
+          (task.choreId ? '<span aria-label="Repeats">↻ </span>' : "") + escapeHTML(task.title) +
           `</strong><small>` +
           (item ? escapeHTML(item.name) + (value ? ` · ` : ``) : ``) +
           escapeHTML(value) +
@@ -899,8 +899,48 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
               renderButton(`Clear done`, `clear-done`, `m-btn--quiet`, !0) +
               `</div>`
             : ``)
-        : ``)
+        : ``) + renderChores()
     );
+  }
+  var choreEdit = null, choreDraft = null, choreError = "", choreBusy = false;
+  function readChoreForm(form) {
+    var data = new FormData(form);
+    return { id: choreEdit || createId("c"), title: data.get("choreTitle").trim(), who: data.get("choreWho") || null,
+      days: data.getAll("choreDays").map(Number), erevShabbos: data.has("erevShabbos"), erevYomTov: data.has("erevYomTov") };
+  }
+  function renderChores() {
+    var c = choreDraft || (mobileData.chores || []).find(function (c) { return c.id === choreEdit; }) ||
+      { title: "", who: "", days: [], erevShabbos: false, erevYomTov: false };
+    return '<section class="m-household-settings m-household-card m-chores"><h2>Repeating chores</h2><p class="m-muted">Choose when a chore appears. Everyone can check it off in Tasks; it starts fresh on its next scheduled day. Holiday chores appear before candle lighting.</p>' +
+      '<p role="alert" class="m-household-error">' + escapeHTML(choreError) + '</p>' +
+      (mobileData.chores || []).map(function (chore) {
+        return '<div class="m-family-row"><strong>↻ ' + escapeHTML(chore.title) + '</strong><small>' +
+          escapeHTML(chore.days.map(function (d) { return ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d]; }).concat(chore.erevShabbos ? ["Erev Shabbos"] : [], chore.erevYomTov ? ["Erev Yom Tov"] : []).join(" · ") || "No days selected") +
+          '</small><button type="button" class="m-btn" data-chore-edit="' + escapeHTML(chore.id) + '" data-write>Edit</button> <button type="button" class="m-btn m-btn--quiet" data-chore-delete="' + escapeHTML(chore.id) + '" data-write>Delete</button></div>';
+      }).join("") +
+      '<form data-form="chore"><fieldset' + (viewState.kodesh || choreBusy ? " disabled" : "") + '>' +
+      settingsInput("Chore title", "choreTitle", c.title) +
+      '<label class="m-household-label">Assign to<select class="m-input" name="choreWho"><option value="">Anyone</option>' +
+      window.CONFIG.people.map(function (p) { return '<option value="' + escapeHTML(p.id) + '"' + (p.id === c.who ? " selected" : "") + '>' + escapeHTML(p.name) + '</option>'; }).join("") +
+      '</select></label><fieldset class="m-opinions"><legend>Weekdays</legend>' +
+      ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"].map(function (d, i) { return '<label class="m-weekday-chip"><input type="checkbox" name="choreDays" value="' + i + '"' + (c.days.includes(i) ? " checked" : "") + '> ' + d.slice(0,3) + '</label>'; }).join("") +
+      '</fieldset><label class="m-household-check"><input type="checkbox" name="erevShabbos"' + (c.erevShabbos ? " checked" : "") + '> Erev Shabbos</label>' +
+      '<label class="m-household-check"><input type="checkbox" name="erevYomTov"' + (c.erevYomTov ? " checked" : "") + '> Erev Yom Tov</label>' +
+      '<button class="m-btn m-btn--solid" data-write>' + (choreBusy ? "Saving…" : choreEdit ? "Save chore" : "Add chore") + '</button>' +
+      (choreEdit ? ' <button type="button" class="m-btn" data-chore-cancel>Cancel</button>' : "") + '</fieldset></form></section>';
+  }
+  async function saveChores(chores) {
+    if (viewState.kodesh || choreBusy) return;
+    choreBusy = true; choreError = "";
+    try {
+      await householdApi("/api/state/chores", "PUT", { json: chores, base: stateSync.versions.chores || 0 });
+      choreEdit = null; choreDraft = null;
+      await stateSync.load("chores");
+      await stateSync.load("tasks");
+    } catch (error) {
+      choreError = error.message || "Could not save chores.";
+      await stateSync.load("chores").catch(function () {});
+    } finally { choreBusy = false; render(); }
   }
   function musicApi(path, options) {
     return fetch(path, Object.assign({ cache: `no-store` }, options || {}))
@@ -1707,6 +1747,12 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
     }
     var value = event.target.closest(`button,[data-grocery-id],[data-sheet-backdrop]`);
     if (value && !isWriteDisabled(value)) {
+      if (value.hasAttribute("data-chore-edit")) { choreEdit = value.dataset.choreEdit; choreDraft = null; choreError = ""; render(); return; }
+      if (value.hasAttribute("data-chore-cancel")) { choreEdit = null; choreDraft = null; render(); return; }
+      if (value.hasAttribute("data-chore-delete")) {
+        if (confirm("Stop repeating this chore? Existing tasks stay on the list.")) saveChores((mobileData.chores || []).filter(function (c) { return c.id !== value.dataset.choreDelete; }));
+        return;
+      }
       if (value.matches("[data-household-action],[data-city-pick],[data-calendar-remove],[data-family-rename],[data-family-pin],[data-family-delete]")) {
         settingsAction(value);
         return;
@@ -2179,6 +2225,14 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
     appRoot.addEventListener(`submit`, function (event) {
       var value = event.target;
       event.preventDefault();
+      if (value.dataset.form === "chore") {
+        if (viewState.kodesh) return;
+        var chore = readChoreForm(value);
+        document.activeElement?.blur();
+        if (!chore.title) { choreError = "Enter a chore title."; render(); return; }
+        saveChores((mobileData.chores || []).filter(function (c) { return c.id !== chore.id; }).concat([chore]));
+        return;
+      }
       if (value.dataset.form === "household-settings" || value.dataset.form === "family-add") {
         submitSettings(value);
         return;
@@ -2245,6 +2299,7 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
       }
     }),
     appRoot.addEventListener(`input`, function (event) {
+      if (event.target.closest('[data-form="chore"]')) choreDraft = readChoreForm(event.target.closest("form"));
       if (event.target.closest("#householdSettings")) {
         if (event.target.name === "cityQuery") cityQuery = event.target.value;
         readSettingsForm();
@@ -2261,6 +2316,7 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
         event.target.name === `task` && (viewState.query = event.target.value);
     }),
     appRoot.addEventListener(`change`, function (event) {
+      if (event.target.closest('[data-form="chore"]')) choreDraft = readChoreForm(event.target.closest("form"));
       if (event.target.closest("#householdSettings")) readSettingsForm();
       if (event.target.matches && event.target.matches(`[data-music-volume]`)) {
         viewState.musicVolume = Number(event.target.value);
