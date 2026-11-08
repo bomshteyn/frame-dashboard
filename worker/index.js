@@ -90,12 +90,20 @@ async function householdRoute(request, env, url) {
       return { geonameid: Number(c.id), name: c.value, lat: l.latitude, lon: l.longitude, tz: l.tzid, israel: l.cc === "IL" };
     })));
   }
-  if (!url.pathname.startsWith("/api/admin/households")) return null;
-  if (h.id !== 1) return json({ error: "Forbidden" }, 403);
+  return null;
+}
+async function adminRoute(request, env, url) {
+  if (!env.ADMIN_PASSWORD || !sessionSecretBytes(env.SESSION_SECRET)) return json({ error: "Admin not configured" }, 503);
+  if (url.pathname === "/api/admin/login" && request.method === "POST") return login(request, env, true);
+  if (!await adminSession(request, env)) return json({ error: "Authentication required" }, 401);
+  if (url.pathname === "/api/admin/logout" && request.method === "POST") {
+    return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json", "cache-control": "no-store",
+      "set-cookie": "fd_a=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0" } });
+  }
   const match = /^\/api\/admin\/households(?:\/(\d+)(\/pin)?)?$/.exec(url.pathname);
   if (!match) return json({ error: "Not found" }, 404);
   const id = Number(match[1]);
-  if (!id && request.method === "GET") return json((await env.DB.prepare("SELECT id, name, created FROM household ORDER BY id").all()).results);
+  if (!id && request.method === "GET") return json((await env.DB.prepare("SELECT h.id, h.name, h.created, s.updated AS heartbeat FROM household h LEFT JOIN state s ON s.key = CASE WHEN h.id = 1 THEN 'heartbeat' ELSE 'h' || h.id || ':heartbeat' END ORDER BY h.id").all()).results);
   const body = ["POST", "PATCH"].includes(request.method) ? await request.json().catch(() => null) : null;
   if ((!id && request.method === "POST") || (id && !match[2] && request.method === "PATCH")) {
     if (typeof body?.name !== "string" || !body.name.trim() || body.name.length > 100) return json({ error: "Name required" }, 400);
@@ -981,8 +989,16 @@ async function sessionHousehold(request, env) {
   const expected = await sessionSignature(env.SESSION_SECRET, match[1] ? `${hid}.${expires}` : expires);
   return expected && constantTimeEqual(expected, match[3]) ? hid : null;
 }
-async function login(request, env) {
-  if (!env.FAMILY_PIN || !sessionSecretBytes(env.SESSION_SECRET)) return json({ error: "Login is not configured" }, 503);
+async function adminSession(request, env) {
+  const match = /^(\d+)\.([a-f\d]{64})$/i.exec(cookieValue(request, "fd_a"));
+  if (!match) return false;
+  const expires = Number(match[1]), now = Math.floor(Date.now() / 1000);
+  if (!Number.isSafeInteger(expires) || expires <= now || expires > now + 30 * 86400 + 60) return false;
+  const signature = await sessionSignature(env.SESSION_SECRET, "admin." + expires);
+  return signature && constantTimeEqual(signature, match[2]);
+}
+async function login(request, env, admin = false) {
+  if (!(admin ? env.ADMIN_PASSWORD : env.FAMILY_PIN) || !sessionSecretBytes(env.SESSION_SECRET)) return json({ error: admin ? "Admin not configured" : "Login is not configured" }, 503);
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
   const now = Date.now();
   const cutoff = now - LOGIN_WINDOW_MS;
@@ -995,22 +1011,25 @@ async function login(request, env) {
   } catch (_) {
     return json({ error: "Invalid JSON" }, 400);
   }
-  if (!body || typeof body.pin !== "string") return json({ error: "Invalid PIN" }, 400);
-  const hid = constantTimeEqual(body.pin, env.FAMILY_PIN) ? 1 : (await env.DB.prepare("SELECT id FROM household WHERE pin_hash = ?").bind(await sessionSignature(env.SESSION_SECRET, "pin:" + body.pin)).first())?.id;
+  if (!body || typeof body[admin ? "password" : "pin"] !== "string") return json({ error: admin ? "Invalid password" : "Invalid PIN" }, 400);
+  const hid = admin ? constantTimeEqual(await sessionSignature(env.SESSION_SECRET, "admin-password:" + body.password), await sessionSignature(env.SESSION_SECRET, "admin-password:" + env.ADMIN_PASSWORD)) :
+    constantTimeEqual(body.pin, env.FAMILY_PIN) ? 1 : (await env.DB.prepare("SELECT id FROM household WHERE pin_hash = ?").bind(await sessionSignature(env.SESSION_SECRET, "pin:" + body.pin)).first())?.id;
   if (!hid) {
     await env.DB.prepare("INSERT INTO login_fail (ip, ts) VALUES (?, ?)").bind(ip, now).run();
     const failures = Number(row?.count || 0) + 1;
-    return json({ error: failures >= LOGIN_MAX_FAILURES ? "Too many attempts" : "Incorrect PIN" }, failures >= LOGIN_MAX_FAILURES ? 429 : 401);
+    return json({ error: failures >= LOGIN_MAX_FAILURES ? "Too many attempts" : admin ? "Incorrect password" : "Incorrect PIN" }, failures >= LOGIN_MAX_FAILURES ? 429 : 401);
   }
   await env.DB.prepare("DELETE FROM login_fail WHERE ip = ?").bind(ip).run();
-  const expires = Math.floor(now / 1e3) + SESSION_SECONDS;
-  const signature = await sessionSignature(env.SESSION_SECRET, `${hid}.${expires}`);
+  const seconds = admin ? 30 * 86400 : SESSION_SECONDS;
+  const expires = Math.floor(now / 1e3) + seconds;
+  const signature = await sessionSignature(env.SESSION_SECRET, admin ? "admin." + expires : `${hid}.${expires}`);
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
     headers: {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "no-store",
-      "set-cookie": `fd_s=h${hid}.${expires}.${signature}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${SESSION_SECONDS}`
+      "set-cookie": admin ? `fd_a=${expires}.${signature}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${seconds}` :
+        `fd_s=h${hid}.${expires}.${signature}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${seconds}`
     }
   });
 }
@@ -1545,6 +1564,11 @@ var index_default = {
     }
     if ((url.pathname === "/m" || url.pathname === "/m/") && env.ASSETS) {
       return html("/m.html");
+    }
+    if ((url.pathname === "/admin" || url.pathname === "/admin/") && env.ASSETS) return html("/admin.html");
+    if (url.pathname.startsWith("/api/admin/")) {
+      try { return await adminRoute(request, env, url); }
+      catch (_) { return json({ error: "Admin request failed" }, 502); }
     }
     if (url.pathname.startsWith("/api/music/")) {
       if (!household) return json({ error: "Authentication required" }, 403);

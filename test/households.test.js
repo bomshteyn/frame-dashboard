@@ -24,7 +24,7 @@ function setup() {
       return result;
     } catch (e) { sqlite.exec("ROLLBACK"); throw e; }
   } };
-  const env = { DB, SESSION_SECRET: "a".repeat(64), FAMILY_PIN: "1234" };
+  const env = { DB, SESSION_SECRET: "a".repeat(64), FAMILY_PIN: "1234", ADMIN_PASSWORD: "admin-test-password" };
   const api = (path, cookie, method = "GET", body) => worker.fetch(new Request("https://frame.test" + path, {
     method, headers: { cookie: cookie || "", "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body)
@@ -40,12 +40,15 @@ function setup() {
 async function pair() {
   const ctx = setup();
   const owner = await ctx.login("1234");
-  const r = await ctx.api("/api/admin/households", owner, "POST", { name: "Friend" });
+  const adminResponse = await ctx.api("/api/admin/login", "", "POST", { password: ctx.env.ADMIN_PASSWORD });
+  assert.equal(adminResponse.status, 200);
+  const admin = adminResponse.headers.get("set-cookie").split(";")[0];
+  const r = await ctx.api("/api/admin/households", admin, "POST", { name: "Friend" });
   assert.equal(r.status, 201);
   const created = await r.json();
   assert.match(created.pin, /^\d{8}$/);
   assert.equal(created.id, 2);
-  return { ...ctx, owner, friend: await ctx.login(created.pin) };
+  return { ...ctx, owner, admin, friend: await ctx.login(created.pin) };
 }
 
 test("legacy cookies still identify household 1; new PIN login and admin isolation", async () => {
@@ -64,13 +67,13 @@ test("legacy cookies still identify household 1; new PIN login and admin isolati
     ["/api/admin/households/2/pin", "POST", {}],
     ["/api/admin/households/2", "PATCH", { name: "Other" }],
     ["/api/admin/households/2", "DELETE"]
-  ]) assert.equal((await api(path, friend, method, body)).status, 403);
+  ]) assert.equal((await api(path, friend, method, body)).status, 401);
   assert.equal((await api("/api/household", friend.replace("h2.", "h1."))).status, 401);
   assert.equal((await api("/api/music/status")).status, 403);
 });
 
 test("state, album photos and hidden photos are isolated, with unprefixed API keys", async () => {
-  const { api, sqlite, owner, friend } = await pair();
+  const { api, sqlite, owner, admin, friend } = await pair();
   for (const [key, value] of [["tasks", "owner"], ["h2:tasks", "friend"]]) sqlite.prepare("INSERT INTO state VALUES (?, ?, 1)").run(key, JSON.stringify(value));
   for (const [cookie, value] of [[owner, "owner"], [friend, "friend"]]) {
     assert.equal((await (await api("/api/state/tasks", cookie)).json()).json, value);
@@ -139,7 +142,7 @@ test("settings validate full replacements and reload only their own frames", asy
 });
 
 test("migration preserves old music credentials and is idempotent; deletion removes household data", async () => {
-  const { api, sqlite, owner, friend } = await pair();
+  const { api, sqlite, owner, admin, friend } = await pair();
   const migration = readFileSync(new URL("../migrations/0004_households.sql", import.meta.url), "utf8");
   sqlite.prepare("INSERT INTO music_auth VALUES (1, 'old-token', 'old-device', NULL, 'old@example.test', 1)").run();
   sqlite.exec(migration);
@@ -147,11 +150,11 @@ test("migration preserves old music credentials and is idempotent; deletion remo
   assert.equal((await (await api("/api/music/status", owner)).json()).connected, true);
   assert.equal((await (await api("/api/music/status", friend)).json()).connected, false);
   sqlite.prepare("INSERT INTO state VALUES ('h2:tasks', '[]', 1)").run();
-  assert.equal((await api("/api/admin/households/2", owner, "DELETE")).status, 200);
+  assert.equal((await api("/api/admin/households/2", admin, "DELETE")).status, 200);
   assert.equal((await api("/api/household", friend)).status, 401);
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM state WHERE key = 'h2:tasks'").get().n, 0);
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM household_music_auth WHERE hid = 2").get().n, 0);
-  assert.equal((await api("/api/admin/households/1", owner, "DELETE")).status, 400);
+  assert.equal((await api("/api/admin/households/1", admin, "DELETE")).status, 400);
 });
 
 test("writes and editing locks use household state, photos and location", async () => {
@@ -198,17 +201,62 @@ test("geo search enriches cities from Hebcal and reports upstream failures", asy
 });
 
 test("admin listing, rename and PIN rotation never expose stored hashes", async () => {
-  const { api, owner, friend, login } = await pair();
-  assert.equal((await api("/api/admin/households", owner, "POST", { name: "" })).status, 400);
-  assert.equal((await api("/api/admin/households/999", owner, "PATCH", { name: "Missing" })).status, 404);
-  assert.equal((await api("/api/admin/households/2", owner, "PATCH", { name: "New name" })).status, 200);
-  const list = await (await api("/api/admin/households", owner)).json();
+  const { api, owner, admin, friend, login } = await pair();
+  assert.equal((await api("/api/admin/households", admin, "POST", { name: "" })).status, 400);
+  assert.equal((await api("/api/admin/households/999", admin, "PATCH", { name: "Missing" })).status, 404);
+  assert.equal((await api("/api/admin/households/2", admin, "PATCH", { name: "New name" })).status, 200);
+  const list = await (await api("/api/admin/households", admin)).json();
   assert.equal(list[1].name, "New name");
-  assert.deepEqual(Object.keys(list[1]).sort(), ["created", "id", "name"]);
-  const rotated = await (await api("/api/admin/households/2/pin", owner, "POST", {})).json();
+  assert.deepEqual(Object.keys(list[1]).sort(), ["created", "heartbeat", "id", "name"]);
+  const rotated = await (await api("/api/admin/households/2/pin", admin, "POST", {})).json();
   assert.match(rotated.pin, /^\d{8}$/);
   assert.match(await login(rotated.pin), /^fd_s=h2\./);
   assert.equal((await (await api("/api/household", friend)).json()).name, "New name");
+});
+
+test("admin authentication is separate, bounded, domain-separated and optional", async () => {
+  const { api, env, sqlite, owner, friend, admin } = await pair();
+  for (const cookie of ["", owner, friend, admin.replace("fd_a=", "fd_s="), admin + "bad"]) {
+    assert.equal((await api("/api/admin/households", cookie)).status, 401);
+  }
+  assert.equal((await api("/api/household", admin)).status, 401);
+  const expires = Math.floor(Date.now() / 1000) + 3600;
+  const key = await crypto.subtle.importKey("raw", Buffer.from(env.SESSION_SECRET, "hex"), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  for (const [prefix, expiry] of [["", expires], ["admin.", expires - 7200], ["admin.", expires + 40 * 86400]]) {
+    const sig = Buffer.from(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(prefix + expiry))).toString("hex");
+    assert.equal((await api("/api/admin/households", "fd_a=" + expiry + "." + sig)).status, 401);
+  }
+  const logout = await api("/api/admin/logout", admin, "POST");
+  assert.equal(logout.status, 200);
+  assert.match(logout.headers.get("set-cookie"), /fd_a=;.*Max-Age=0/);
+  assert.ok(!logout.headers.get("set-cookie").includes("fd_s"));
+  assert.equal((await api("/api/admin/households", logout.headers.get("set-cookie"))).status, 401);
+  assert.equal((await api("/api/household", owner)).status, 200);
+  assert.equal((await api("/api/admin/login", "", "POST", {})).status, 400);
+  for (let i = 0; i < 5; i++) {
+    assert.equal((await api("/api/admin/login", "", "POST", { password: "wrong" })).status, i === 4 ? 429 : 401);
+  }
+  assert.equal((await api("/api/admin/login", "", "POST", { password: env.ADMIN_PASSWORD })).status, 429);
+  sqlite.exec("UPDATE login_fail SET ts=0");
+  const login = await api("/api/admin/login", "", "POST", { password: env.ADMIN_PASSWORD });
+  assert.equal(login.status, 200);
+  assert.match(login.headers.get("set-cookie"), /fd_a=.*HttpOnly; Secure; SameSite=Strict; Path=\/; Max-Age=2592000/);
+  delete env.ADMIN_PASSWORD;
+  for (const [path, method] of [["households", "GET"], ["login", "POST"]]) {
+    const response = await api("/api/admin/" + path, admin, method, method === "POST" ? { password: "test" } : undefined);
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).error, "Admin not configured");
+  }
+});
+
+test("admin lists only each family's own heartbeat, including families without frames", async () => {
+  const { api, sqlite, admin } = await pair();
+  let list = await (await api("/api/admin/households", admin)).json();
+  assert.equal(list[0].heartbeat, null);
+  assert.equal(list[1].heartbeat, null);
+  sqlite.prepare("INSERT INTO state VALUES ('heartbeat', '{}', 123), ('h2:heartbeat', '{}', 456)").run();
+  list = await (await api("/api/admin/households", admin)).json();
+  assert.deepEqual(list.map(f => [f.id, f.heartbeat]), [[1, 123], [2, 456]]);
 });
 
 test("HTML bootstrap uses the household or anonymous defaults and escapes script markup", async () => {

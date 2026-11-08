@@ -1,0 +1,23 @@
+.task-head { position: relative; }
+.task-head .frame-repeat-open { position: absolute; left: 220px; min-height: 46px; }
+.task-options > div { position: relative; }
+.frame-repeat-add { position: absolute; right: 0; top: -13px; min-height: 44px; padding: 8px 16px; border-radius: 22px; color: var(--ink); background: var(--paper); font-size: 15px; font-weight: 700; }
+.frame-chores { display: flex; flex-direction: column; gap: 12px; max-height: 92vh; overflow: auto; }
+.frame-chores h2, .frame-chores p { margin: 0; }
+.frame-chores p { color: var(--mute); font-size: 16px; }
+.frame-chores fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.frame-chores label { display: flex; flex-direction: column; gap: 6px; font-weight: 700; }
+.frame-chores input.s-input, .frame-chores select { background: var(--paper); border: 1px solid var(--line); border-radius: 12px; padding: 12px; min-height: 48px; color: var(--ink); font: inherit; width: 100%; }
+.frame-weekdays, .frame-repeat-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.frame-weekday { position: relative; }
+.frame-weekday input { position: absolute; opacity: 0; }
+.frame-weekday span { min-width: 54px; min-height: 46px; border-radius: 24px; background: var(--paper); display: grid; place-items: center; border: 2px solid var(--line); }
+.frame-weekday input:checked + span { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.frame-weekday input:focus-visible + span { outline: 3px solid var(--mute); outline-offset: 2px; }
+.frame-chores .frame-repeat-check { flex-direction: row; align-items: center; gap: 12px; min-height: 44px; }
+.frame-repeat-check input { width: 24px; height: 24px; accent-color: var(--ink); }
+.frame-repeat-row { display: flex; flex-direction: column; gap: 6px; width: 100%; text-align: left; border-radius: 14px; padding: 16px; min-height: 70px; background: var(--paper); color: var(--ink); margin-top: 12px; }
+.frame-repeat-row strong { font-size: 21px; }
+.frame-repeat-row span, .frame-repeat-row small { color: var(--mute); font-size: 16px; }
+.frame-chores .frame-repeat-error { color: var(--alert); }
+.frame-repeat-actions [data-delete-repeat] { color: var(--alert); }

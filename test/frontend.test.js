@@ -73,7 +73,9 @@ test("household surfaces use injected location and dynamic havdalah without chan
   assert.match(main, /n\.havdalahTimes\|\|\[\{label:\`60 min\`/);
   assert.match(main, /\.join\(\` \`\)/);
   const phone = readFileSync("public/assets/phone/app.js", "utf8");
-  for (const path of ["/api/settings", "/api/household", "/api/admin/households", "/api/geo/search?q="]) assert.ok(phone.includes(path));
+  for (const path of ["/api/settings", "/api/household", "/api/geo/search?q="]) assert.ok(phone.includes(path));
+  assert.ok(!phone.includes("/api/admin/"));
+  assert.ok(!phone.includes("renderFamilies"));
   for (const copy of ["Secret address in iCal format", "anyone with the link can view", "12 hours", "Save settings", "End Shabbos mode at"]) assert.ok(phone.includes(copy));
   const auth = asset("auto-update-");
   assert.ok(auth.includes("![6,8].includes(t.length)"));
@@ -100,9 +102,23 @@ test("Shabbat havdalah rendering preserves legacy rows and supports custom opini
 
 test("phone page loads its readable source assets", () => {
   const html = readFileSync("public/m.html", "utf8");
-  assert.match(html, /src="\/assets\/phone\/app\.js\?v=5"/);
+  assert.match(html, /src="\/assets\/phone\/app\.js\?v=6"/);
   assert.match(html, /href="\/assets\/phone\/phone\.css\?v=4"/);
   assert.doesNotMatch(html, /mobile-[\w-]+\.(?:js|css)/);
+});
+
+test("standalone admin and frame repeat controls use separate readable assets", () => {
+  const admin = readFileSync(new URL("../public/admin.html", import.meta.url), "utf8");
+  assert.match(admin, /assets\/admin\/admin.js\?v=1/);
+  const main = asset("main-");
+  assert.ok(main.includes("data-repeat-list"));
+  assert.ok(main.includes("data-repeat-add"));
+  assert.ok(main.includes("data-edit-repeat"));
+  assert.ok(main.includes('await i.load(`tasks`)'));
+  const portal = readFileSync(new URL("../public/assets/admin/admin.js", import.meta.url), "utf8");
+  assert.ok(portal.includes("No families yet"));
+  assert.ok(portal.includes("On the frame's login screen enter PIN "));
+  assert.ok(!portal.includes("localStorage"));
 });
 
 test("weather detail renders the household city safely and defaults to Toronto", () => {

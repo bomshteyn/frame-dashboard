@@ -104,8 +104,8 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
       prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
     );
   }
-  var householdSettings = null, householdInfo = null, families = [], cityResults = [],
-    settingsError = "", settingsNotice = "", settingsBusy = false, familyPin = null, cityQuery = "";
+  var householdSettings = null, householdInfo = null, cityResults = [],
+    settingsError = "", settingsNotice = "", settingsBusy = false, cityQuery = "";
   async function householdApi(path, method, body) {
     var response = await fetch(path, {
       method: method || "GET",
@@ -124,7 +124,6 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
       var result = await Promise.all([householdApi("/api/settings"), householdApi("/api/household")]);
       householdSettings = result[0];
       householdInfo = result[1];
-      families = householdInfo.admin ? await householdApi("/api/admin/households") : [];
     } catch (error) { settingsError = error.message; }
     render();
   }
@@ -180,13 +179,7 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
       '<label class="m-household-check"><input type="checkbox" name="dafYomi"' + (s.zmanim.dafYomi ? " checked" : "") + '> Show Daf Yomi</label></section>' +
       '<section class="m-household-card"><h2 class="serif">Minyanim</h2>' + settingsInput("Minyanim website (optional, HTTPS)", "minyanimUrl", s.minyanimUrl, "url") + '<p class="m-muted">Leave empty to hide Minyanim on the frame. The website must allow being embedded.</p></section>' +
       '<button class="m-btn m-btn--solid m-household-save" type="submit">' + (settingsBusy ? "Saving…" : "Save settings") + '</button></fieldset></form>' +
-      (householdInfo?.admin ? renderFamilies() : "") + '</div>';
-  }
-  function renderFamilies() {
-    return '<section class="m-household-card m-families"><h2 class="serif">Families</h2><p class="m-muted">Give another family their own frame, photos and settings.</p>' +
-      (familyPin ? '<div class="m-pin-notice" role="status"><strong>PIN: ' + escapeHTML(familyPin.pin) + '</strong><p>Save this PIN now — it is shown only once. Enter this PIN on the new frame’s login screen and on their phone at ' + escapeHTML(location.origin + "/m") + '.</p><button type="button" class="m-btn" data-household-action="dismiss-pin">I saved the PIN</button></div>' : "") +
-      families.map(function (f) { return '<div class="m-family-row"><strong>' + escapeHTML(f.name) + '</strong><small>Family ' + f.id + '</small><div><button type="button" class="m-btn" data-family-rename="' + f.id + '">Rename</button>' + (f.id === 1 ? "" : '<button type="button" class="m-btn" data-family-pin="' + f.id + '">Reset PIN</button><button type="button" class="m-btn m-btn--quiet" data-family-delete="' + f.id + '">Delete</button>') + '</div></div>'; }).join("") +
-      '<form data-form="family-add">' + settingsInput("New family name", "familyName", "") + '<button class="m-btn m-btn--solid"' + (settingsBusy ? " disabled" : "") + '>Add family</button></form></section>';
+      '</div>';
   }
   async function settingsAction(button) {
     if (settingsBusy) return;
@@ -200,57 +193,33 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
     }
     if (action === "add-calendar") { householdSettings.calendars.push({ person: "", url: "" }); render(); return; }
     if (button.dataset.calendarRemove !== undefined) { householdSettings.calendars.splice(Number(button.dataset.calendarRemove), 1); render(); return; }
-    if (action === "dismiss-pin") { familyPin = null; render(); return; }
     settingsBusy = true;
     try {
       if (action === "search") {
         cityQuery = appRoot.querySelector('[name="cityQuery"]').value.trim();
         cityResults = await householdApi("/api/geo/search?q=" + encodeURIComponent(cityQuery));
         if (!cityResults.length) settingsNotice = "No cities found. Try a nearby city.";
-      } else {
-        var id = button.dataset.familyRename || button.dataset.familyPin || button.dataset.familyDelete;
-        var family = families.find(function (f) { return f.id === Number(id); });
-        familyPin = null;
-        if (button.dataset.familyRename) {
-          var name = prompt("Family name", family.name);
-          if (name === null) return;
-          await householdApi("/api/admin/households/" + id, "PATCH", { name: name });
-        } else if (button.dataset.familyPin) {
-          if (!confirm("Generate a new login PIN for " + family.name + "? Existing frames stay logged in.")) return;
-          familyPin = await householdApi("/api/admin/households/" + id + "/pin", "POST", {});
-        } else if (button.dataset.familyDelete) {
-          if (!confirm("Delete " + family.name + " and all their frame data? This cannot be undone.")) return;
-          await householdApi("/api/admin/households/" + id, "DELETE");
-        }
-        families = await householdApi("/api/admin/households");
       }
     } catch (error) { settingsError = error.message; }
     finally {
       settingsBusy = false; render();
-      if (familyPin) appRoot.querySelector(".m-pin-notice")?.scrollIntoView({ block: "center" });
-      else if (settingsError) appRoot.querySelector(".m-household-error")?.scrollIntoView({ block: "center" });
+      if (settingsError) appRoot.querySelector(".m-household-error")?.scrollIntoView({ block: "center" });
     }
   }
   async function submitSettings(form) {
     if (settingsBusy) return;
     document.activeElement?.blur();
     readSettingsForm();
-    settingsBusy = true; settingsError = ""; settingsNotice = ""; familyPin = null;
-    var familyName = form.querySelector('[name="familyName"]')?.value.trim();
+    settingsBusy = true; settingsError = ""; settingsNotice = "";
     render();
     try {
-      if (form.dataset.form === "family-add") {
-        familyPin = await householdApi("/api/admin/households", "POST", { name: familyName });
-        families = await householdApi("/api/admin/households");
-      } else {
-        await householdApi("/api/settings", "PUT", householdSettings);
-        window.FD = { ...window.FD, tz: householdSettings.location.tz, city: householdSettings.location.name, minyanimUrl: householdSettings.minyanimUrl };
-        settingsNotice = "Settings saved. Your frames will reload automatically.";
-      }
+      await householdApi("/api/settings", "PUT", householdSettings);
+      window.FD = { ...window.FD, tz: householdSettings.location.tz, city: householdSettings.location.name, minyanimUrl: householdSettings.minyanimUrl };
+      settingsNotice = "Settings saved. Your frames will reload automatically.";
     } catch (error) { settingsError = error.message; }
     finally {
       settingsBusy = false; render();
-      appRoot.querySelector(familyPin ? ".m-pin-notice" : settingsError ? ".m-household-error" : ".m-household-notice")?.scrollIntoView({ block: "center" });
+      appRoot.querySelector(settingsError ? ".m-household-error" : ".m-household-notice")?.scrollIntoView({ block: "center" });
     }
   }
   function localDate() {
@@ -303,7 +272,6 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
       (viewState.modal = null),
       (viewState.sheet = null),
       render());
-    if (tabName !== "settings") familyPin = null;
   }
   function persistState(key) {
     (stateSync.persist(key), render());
@@ -1758,7 +1726,7 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
         if (confirm("Stop repeating this chore? Existing tasks stay on the list.")) saveChores((mobileData.chores || []).filter(function (c) { return c.id !== value.dataset.choreDelete; }));
         return;
       }
-      if (value.matches("[data-household-action],[data-city-pick],[data-calendar-remove],[data-family-rename],[data-family-pin],[data-family-delete]")) {
+      if (value.matches("[data-household-action],[data-city-pick],[data-calendar-remove]")) {
         settingsAction(value);
         return;
       }
@@ -2238,7 +2206,7 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
         saveChores((mobileData.chores || []).filter(function (c) { return c.id !== chore.id; }).concat([chore]));
         return;
       }
-      if (value.dataset.form === "household-settings" || value.dataset.form === "family-add") {
+      if (value.dataset.form === "household-settings") {
         submitSettings(value);
         return;
       }
