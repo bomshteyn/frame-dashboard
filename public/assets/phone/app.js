@@ -3,7 +3,7 @@ import {
   n as filterExpiredTasks,
   r as sortTasks,
   t as formatDueLabel,
-} from "../auto-update-ed4535f0ea.js";
+} from "../auto-update-35c06243f5.js";
 import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
 (function () {
   var mobileData = window.DATA,
@@ -104,9 +104,153 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
       prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
     );
   }
+  var householdSettings = null, householdInfo = null, families = [], cityResults = [],
+    settingsError = "", settingsNotice = "", settingsBusy = false, familyPin = null, cityQuery = "";
+  async function householdApi(path, method, body) {
+    var response = await fetch(path, {
+      method: method || "GET",
+      headers: { "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    var result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Request failed. Please try again.");
+    return result;
+  }
+  async function openSettings() {
+    viewState.tab = "settings";
+    settingsError = "";
+    render();
+    try {
+      var result = await Promise.all([householdApi("/api/settings"), householdApi("/api/household")]);
+      householdSettings = result[0];
+      householdInfo = result[1];
+      families = householdInfo.admin ? await householdApi("/api/admin/households") : [];
+    } catch (error) { settingsError = error.message; }
+    render();
+  }
+  function settingsInput(label, name, value, type) {
+    return '<label class="m-household-label">' + escapeHTML(label) + '<input class="m-input" name="' + name +
+      '" type="' + (type || "text") + '" value="' + escapeHTML(value) + '"></label>';
+  }
+  function settingsSelect(label, name, value, options) {
+    return '<label class="m-household-label">' + label + '<select class="m-input" name="' + name + '">' +
+      options.map(function (o) { return '<option value="' + o[0] + '"' + (String(value) === String(o[0]) ? " selected" : "") + '>' + o[1] + '</option>'; }).join("") + '</select></label>';
+  }
+  function readSettingsForm() {
+    var form = appRoot.querySelector("#householdSettings");
+    if (!form || !householdSettings) return;
+    var data = new FormData(form);
+    householdSettings.photos = { main: data.get("photoMain").trim(), shabbat: data.get("photoShabbat").trim() };
+    householdSettings.calendars = Array.from(form.querySelectorAll("[data-calendar-row]")).map(function (row) {
+      return { person: row.querySelector('[name="calendarPerson"]').value.trim(), url: row.querySelector('[name="calendarUrl"]').value.trim() };
+    });
+    householdSettings.zmanim = {
+      candles: Number(data.get("candles")),
+      havdalah: data.getAll("havdalah").map(function (v) { return v === "8.5deg" ? v : Number(v); }),
+      shabbosEnds: data.get("shabbosEnds") === "8.5deg" ? "8.5deg" : Number(data.get("shabbosEnds")),
+      shema: data.get("shema"), dafYomi: data.has("dafYomi")
+    };
+    householdSettings.minyanimUrl = data.get("minyanimUrl").trim();
+  }
+  function renderSettings() {
+    if (!householdSettings) return '<p class="m-muted" role="status">' + escapeHTML(settingsError || "Loading settings…") + '</p><button class="m-btn" data-household-action="open">Try again</button>';
+    var s = householdSettings, choices = [[42, "42 min"], [50, "50 min"], [60, "60 min"], [72, "72 min"], ["8.5deg", "8.5°"]];
+    return '<div class="m-household-settings"><p class="m-muted">Make this frame feel at home. Frames reload automatically after saving.</p>' +
+      '<p class="m-household-error" role="alert">' + escapeHTML(settingsError) + '</p><p class="m-household-notice" role="status">' + escapeHTML(settingsNotice) + '</p>' +
+      '<form id="householdSettings" data-form="household-settings"><fieldset' + (settingsBusy ? " disabled" : "") + '>' +
+      '<section class="m-household-card"><h2 class="serif">Location</h2><p><strong>' + escapeHTML(s.location.name) + '</strong><br><span class="m-muted">' + escapeHTML(s.location.tz) + (s.location.israel ? " · Israel" : "") + '</span></p>' +
+      settingsInput("Find your city", "cityQuery", cityQuery, "search") + '<button type="button" class="m-btn" data-household-action="search">Search cities</button>' +
+      '<div class="m-city-results" aria-live="polite">' + cityResults.map(function (c, i) { return '<button type="button" class="m-setting-row" data-city-pick="' + i + '"><span><strong>' + escapeHTML(c.name) + '</strong><small>' + escapeHTML(c.tz) + '</small></span>' + phoneIcon("chevron", 16) + '</button>'; }).join("") + '</div></section>' +
+      '<section class="m-household-card"><h2 class="serif">Photos</h2><p class="m-muted">In the Google Photos app, create an album (or open one), tap Share → “Create link” / “Copy link”, then paste it here. It looks like https://photos.app.goo.gl/…</p><p class="m-muted">Use a shared link: anyone with the link can view. Add photos to that album from any family phone. New photos appear on the frame within about 12 hours. To stop a photo showing, use Hide on the frame.</p>' +
+      settingsInput("Main album link", "photoMain", s.photos.main, "url") + settingsInput("Shabbat album link (optional)", "photoShabbat", s.photos.shabbat, "url") +
+      '<p class="m-muted">The optional Shabbat album contains photos shown during Shabbos. Leave it empty to use your main album.</p></section>' +
+      '<section class="m-household-card"><h2 class="serif">Calendars</h2><p class="m-muted">In Google Calendar on a computer: Settings → your calendar → Integrate calendar → copy the “Secret address in iCal format”. Keep this link private.</p>' +
+      s.calendars.map(function (c, i) { return '<div class="m-calendar-edit" data-calendar-row>' + settingsInput("Person name", "calendarPerson", c.person) + settingsInput("ICS link", "calendarUrl", c.url, "url") + '<button type="button" class="m-btn m-btn--quiet" data-calendar-remove="' + i + '">Remove calendar</button></div>'; }).join("") +
+      '<button type="button" class="m-btn" data-household-action="add-calendar">Add calendar</button></section>' +
+      '<section class="m-household-card"><h2 class="serif">Zmanim</h2>' +
+      settingsSelect("Candle lighting · minutes before shkia", "candles", s.zmanim.candles, [15,18,20,22,30,40].map(function (v) { return [v,v + " minutes"]; })) +
+      '<fieldset class="m-opinions"><legend>Havdalah times to show</legend>' + choices.map(function (c) { return '<label><input type="checkbox" name="havdalah" value="' + c[0] + '"' + (s.zmanim.havdalah.includes(c[0]) ? " checked" : "") + '> ' + c[1] + '</label>'; }).join("") + '</fieldset>' +
+      settingsSelect("End Shabbos mode at", "shabbosEnds", s.zmanim.shabbosEnds, choices) +
+      settingsSelect("Shema opinion", "shema", s.zmanim.shema, [["both","Both MGA and GRA"],["mga","MGA"],["gra","GRA"]]) +
+      '<label class="m-household-check"><input type="checkbox" name="dafYomi"' + (s.zmanim.dafYomi ? " checked" : "") + '> Show Daf Yomi</label></section>' +
+      '<section class="m-household-card"><h2 class="serif">Minyanim</h2>' + settingsInput("Minyanim website (optional, HTTPS)", "minyanimUrl", s.minyanimUrl, "url") + '<p class="m-muted">Leave empty to hide Minyanim on the frame. The website must allow being embedded.</p></section>' +
+      '<button class="m-btn m-btn--solid m-household-save" type="submit">' + (settingsBusy ? "Saving…" : "Save settings") + '</button></fieldset></form>' +
+      (householdInfo?.admin ? renderFamilies() : "") + '</div>';
+  }
+  function renderFamilies() {
+    return '<section class="m-household-card m-families"><h2 class="serif">Families</h2><p class="m-muted">Give another family their own frame, photos and settings.</p>' +
+      (familyPin ? '<div class="m-pin-notice" role="status"><strong>PIN: ' + escapeHTML(familyPin.pin) + '</strong><p>Save this PIN now — it is shown only once. Enter this PIN on the new frame’s login screen and on their phone at ' + escapeHTML(location.origin + "/m") + '.</p><button type="button" class="m-btn" data-household-action="dismiss-pin">I saved the PIN</button></div>' : "") +
+      families.map(function (f) { return '<div class="m-family-row"><strong>' + escapeHTML(f.name) + '</strong><small>Family ' + f.id + '</small><div><button type="button" class="m-btn" data-family-rename="' + f.id + '">Rename</button>' + (f.id === 1 ? "" : '<button type="button" class="m-btn" data-family-pin="' + f.id + '">Reset PIN</button><button type="button" class="m-btn m-btn--quiet" data-family-delete="' + f.id + '">Delete</button>') + '</div></div>'; }).join("") +
+      '<form data-form="family-add">' + settingsInput("New family name", "familyName", "") + '<button class="m-btn m-btn--solid"' + (settingsBusy ? " disabled" : "") + '>Add family</button></form></section>';
+  }
+  async function settingsAction(button) {
+    if (settingsBusy) return;
+    var action = button.dataset.householdAction;
+    if (action === "open") return openSettings();
+    readSettingsForm();
+    settingsError = ""; settingsNotice = "";
+    if (button.dataset.cityPick !== undefined) {
+      householdSettings.location = cityResults[Number(button.dataset.cityPick)];
+      cityResults = []; cityQuery = ""; render(); return;
+    }
+    if (action === "add-calendar") { householdSettings.calendars.push({ person: "", url: "" }); render(); return; }
+    if (button.dataset.calendarRemove !== undefined) { householdSettings.calendars.splice(Number(button.dataset.calendarRemove), 1); render(); return; }
+    if (action === "dismiss-pin") { familyPin = null; render(); return; }
+    settingsBusy = true;
+    try {
+      if (action === "search") {
+        cityQuery = appRoot.querySelector('[name="cityQuery"]').value.trim();
+        cityResults = await householdApi("/api/geo/search?q=" + encodeURIComponent(cityQuery));
+        if (!cityResults.length) settingsNotice = "No cities found. Try a nearby city.";
+      } else {
+        var id = button.dataset.familyRename || button.dataset.familyPin || button.dataset.familyDelete;
+        var family = families.find(function (f) { return f.id === Number(id); });
+        familyPin = null;
+        if (button.dataset.familyRename) {
+          var name = prompt("Family name", family.name);
+          if (name === null) return;
+          await householdApi("/api/admin/households/" + id, "PATCH", { name: name });
+        } else if (button.dataset.familyPin) {
+          if (!confirm("Generate a new login PIN for " + family.name + "? Existing frames stay logged in.")) return;
+          familyPin = await householdApi("/api/admin/households/" + id + "/pin", "POST", {});
+        } else if (button.dataset.familyDelete) {
+          if (!confirm("Delete " + family.name + " and all their frame data? This cannot be undone.")) return;
+          await householdApi("/api/admin/households/" + id, "DELETE");
+        }
+        families = await householdApi("/api/admin/households");
+      }
+    } catch (error) { settingsError = error.message; }
+    finally {
+      settingsBusy = false; render();
+      if (familyPin) appRoot.querySelector(".m-pin-notice")?.scrollIntoView({ block: "center" });
+      else if (settingsError) appRoot.querySelector(".m-household-error")?.scrollIntoView({ block: "center" });
+    }
+  }
+  async function submitSettings(form) {
+    if (settingsBusy) return;
+    document.activeElement?.blur();
+    readSettingsForm();
+    settingsBusy = true; settingsError = ""; settingsNotice = ""; familyPin = null;
+    var familyName = form.querySelector('[name="familyName"]')?.value.trim();
+    render();
+    try {
+      if (form.dataset.form === "family-add") {
+        familyPin = await householdApi("/api/admin/households", "POST", { name: familyName });
+        families = await householdApi("/api/admin/households");
+      } else {
+        await householdApi("/api/settings", "PUT", householdSettings);
+        window.FD = { ...window.FD, tz: householdSettings.location.tz, city: householdSettings.location.name, minyanimUrl: householdSettings.minyanimUrl };
+        settingsNotice = "Settings saved. Your frames will reload automatically.";
+      }
+    } catch (error) { settingsError = error.message; }
+    finally {
+      settingsBusy = false; render();
+      appRoot.querySelector(familyPin ? ".m-pin-notice" : settingsError ? ".m-household-error" : ".m-household-notice")?.scrollIntoView({ block: "center" });
+    }
+  }
   function localDate() {
     var value = new Intl.DateTimeFormat(`en-CA`, {
-      timeZone: `America/Toronto`,
+      timeZone: window.FD?.tz || `America/Toronto`,
       year: `numeric`,
       month: `2-digit`,
       day: `2-digit`,
@@ -154,6 +298,7 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
       (viewState.modal = null),
       (viewState.sheet = null),
       render());
+    if (tabName !== "settings") familyPin = null;
   }
   function persistState(key) {
     (stateSync.persist(key), render());
@@ -319,7 +464,7 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
   function taskDueOptions() {
     var date = localDate(),
       value = new Intl.DateTimeFormat(`en-US`, {
-        timeZone: `America/Toronto`,
+        timeZone: window.FD?.tz || `America/Toronto`,
         weekday: `short`,
       }).format(new Date()),
       value2 =
@@ -1161,7 +1306,7 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
         })
         .join(``) +
       `</div><div class="m-section-heading m-settings-heading"><h2>Settings</h2></div><div class="m-settings-list">` +
-      `<button type="button" class="m-setting-row" data-open-sheet="hidden"><span class="m-setting-icon">` + phoneIcon(`eye-off`) + `</span><span><strong>Hidden photos</strong><small>Photos kept off the frame</small></span><b class="m-row-trailing"><span data-hidden-count>` +
+      `<button type="button" class="m-setting-row" data-household-action="open"><span class="m-setting-icon">` + phoneIcon(`home`) + `</span><span><strong>Household settings</strong><small>Location, photos, calendars and zmanim</small></span><b class="m-row-trailing">` + phoneIcon(`chevron`, 16) + `</b></button><button type="button" class="m-setting-row" data-open-sheet="hidden"><span class="m-setting-icon">` + phoneIcon(`eye-off`) + `</span><span><strong>Hidden photos</strong><small>Photos kept off the frame</small></span><b class="m-row-trailing"><span data-hidden-count>` +
       String(window.HQHidden && window.HQHidden.count ? window.HQHidden.count() : 0) +
       `</span>` + phoneIcon(`chevron`, 16) + `</b></button><button type="button" class="m-setting-row" data-open-sheet="people"><span class="m-setting-icon">` + phoneIcon(`users`) + `</span><span><strong>People</strong><small>Family names and assignments</small></span><b class="m-row-trailing">` + phoneIcon(`chevron`, 16) + `</b></button><button type="button" class="m-setting-row" data-open-sheet="shofar"><span class="m-setting-icon">` + phoneIcon(`bell`) + `</span><span><strong>Shabbat shofar</strong><small>` +
       (window.HQShofar && window.HQShofar.phoneStatus ? escapeHTML(window.HQShofar.phoneStatus()) : `Alerts and frame volume`) +
@@ -1199,6 +1344,7 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
     );
   }
   function renderCurrentScreen() {
+    if (viewState.tab === "settings") return renderHeader("Settings") + '<main class="m-content">' + renderSettings() + '</main>';
     return viewState.tab === `tasks`
       ? renderHeader(`Tasks`, !1, mobileData.tasks.filter(function (item) { return !item.done; }).length + ` open`) +
           `<main class="m-content">` +
@@ -1284,7 +1430,7 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
       if (
         document.activeElement &&
         appRoot.contains(document.activeElement) &&
-        document.activeElement.hasAttribute(`data-person-name`)
+        (document.activeElement.hasAttribute(`data-person-name`) || (document.activeElement.matches("input,select,textarea") && document.activeElement.closest(".m-household-settings")))
       ) {
         viewState.renderPending = !0;
         var element = appRoot.querySelector(`.m-banner`);
@@ -1561,6 +1707,10 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
     }
     var value = event.target.closest(`button,[data-grocery-id],[data-sheet-backdrop]`);
     if (value && !isWriteDisabled(value)) {
+      if (value.matches("[data-household-action],[data-city-pick],[data-calendar-remove],[data-family-rename],[data-family-pin],[data-family-delete]")) {
+        settingsAction(value);
+        return;
+      }
       if (value.dataset.sheetClose !== void 0 || (value.dataset.sheetBackdrop !== void 0 && event.target === value))
         return ((viewState.sheet = null), render());
       if (value.dataset.musicBrowseTab) {
@@ -2029,6 +2179,10 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
     appRoot.addEventListener(`submit`, function (event) {
       var value = event.target;
       event.preventDefault();
+      if (value.dataset.form === "household-settings" || value.dataset.form === "family-add") {
+        submitSettings(value);
+        return;
+      }
       if (value.dataset.form === `music-credentials`) {
           var email = value.querySelector(`[name="musicEmail"]`).value.trim(),
             password = value.querySelector(`[name="musicPassword"]`).value;
@@ -2091,6 +2245,10 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
       }
     }),
     appRoot.addEventListener(`input`, function (event) {
+      if (event.target.closest("#householdSettings")) {
+        if (event.target.name === "cityQuery") cityQuery = event.target.value;
+        readSettingsForm();
+      }
       if (event.target.name === `item`) {
         viewState.query = event.target.value;
         var element = appRoot.querySelector(`#mSuggestions`);
@@ -2103,6 +2261,7 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
         event.target.name === `task` && (viewState.query = event.target.value);
     }),
     appRoot.addEventListener(`change`, function (event) {
+      if (event.target.closest("#householdSettings")) readSettingsForm();
       if (event.target.matches && event.target.matches(`[data-music-volume]`)) {
         viewState.musicVolume = Number(event.target.value);
         issueMusicCommand(`volume`, null, null, viewState.musicVolume);

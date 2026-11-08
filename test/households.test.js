@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
-import worker, { zmanimData } from "../worker/index.js";
+import worker, { zmanimData, scanAlbum } from "../worker/index.js";
 
 function setup() {
   const sqlite = new DatabaseSync(":memory:");
@@ -234,4 +234,20 @@ test("HTML bootstrap uses the household or anonymous defaults and escapes script
       }
     }
   } finally { globalThis.HTMLRewriter = original; }
+});
+
+test("album scanning uses exact namespaced keys, never another household's scan", async () => {
+  const { env, sqlite, api, login } = setup();
+  const owner = await login("1234");
+  sqlite.prepare("INSERT INTO album_scan (album, live_gen, count, finished) VALUES ('main', 1, 1, 1)").run();
+  sqlite.prepare("INSERT INTO album_photo (album, gen, id, src) VALUES ('main', 1, 'owner', 'owner-photo')").run();
+  const html = '<script class="ds:1">var x = {data:' +
+    JSON.stringify([null, [], null, ["friend-album"]]) + '};</script><script>"FdrFJe":"sid","cfb2h":"bl"</script>';
+  await scanAlbum(env.DB, "h2:main", "https://photos.google.com/share/friend-album?key=key",
+    async () => ({ ok: true, url: "https://photos.google.com/share/friend-album?key=key", text: async () => html }));
+  assert.equal(sqlite.prepare("SELECT src FROM album_photo WHERE album = 'main'").get().src, "owner-photo");
+  assert.equal(sqlite.prepare("SELECT finished FROM album_scan WHERE album = 'main'").get().finished, 1);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM album_scan WHERE album = 'h2:main'").get().n, 1);
+  const settings = await (await api("/api/settings", owner)).json();
+  assert.equal(settings.minyanimUrl, "https://torontominyanim.com/");
 });

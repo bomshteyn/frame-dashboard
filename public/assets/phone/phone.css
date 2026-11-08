@@ -5,6 +5,35 @@ body {
   min-height: 100%;
   overflow: auto;
 }
+.m-household-settings > .m-muted { margin-bottom: 18px; line-height: 1.5; }
+.m-household-settings, .m-household-settings * { box-sizing: border-box; }
+.m-household-card {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--card, #fffdf8);
+  padding: 18px;
+  margin: 0 0 16px;
+}
+.m-household-card h2 { font-size: 29px; margin: 0 0 12px; }
+.m-household-card p { line-height: 1.5; margin: 0 0 14px; overflow-wrap: anywhere; }
+.m-household-label { display: grid; gap: 7px; margin: 14px 0; font-size: 14px; font-weight: 700; }
+.m-household-label .m-input { width: 100%; min-width: 0; font-weight: 400; }
+.m-household-settings fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.m-household-settings .m-opinions { margin: 18px 0; display: flex; flex-wrap: wrap; gap: 12px 18px; }
+.m-opinions legend { font-size: 14px; font-weight: 700; margin-bottom: 10px; }
+.m-opinions label, .m-household-check { display: flex; align-items: center; gap: 6px; min-height: 34px; }
+.m-household-settings input[type="checkbox"] { accent-color: var(--ink); width: 20px; height: 20px; }
+.m-calendar-edit, .m-family-row { border-bottom: 1px solid var(--line); padding-bottom: 16px; margin-bottom: 16px; }
+.m-family-row > strong, .m-family-row > small { display: block; margin-bottom: 6px; }
+.m-family-row > small { color: var(--mute); }
+.m-family-row > div { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+.m-household-save { width: 100%; margin-bottom: 24px; }
+.m-household-error { color: #a32b22; line-height: 1.4; }
+.m-household-notice { color: #3a6745; line-height: 1.4; }
+.m-household-error:empty, .m-household-notice:empty { display: none; }
+.m-pin-notice { background: #f8e8bd; padding: 16px; border-radius: 12px; margin: 16px 0; overflow-wrap: anywhere; }
+.m-pin-notice > strong { display: block; font-size: 25px; letter-spacing: .04em; margin-bottom: 10px; }
+.m-city-results { margin-top: 12px; }
 body {
   padding: 0;
   font-size: 16px;

@@ -18,11 +18,58 @@ test("weather day click handler is bound once per view", () => {
   assert.match(asset("main-"), /e\._wxDays\|\|\(e\._wxDays=!0,e\.addEventListener\(`click`/);
 });
 
+test("household surfaces use injected location and dynamic havdalah without changing default markup", () => {
+  const main = asset("main-");
+  assert.match(main, /window\.FD\?\.tz\|\|`America\/Toronto`/);
+  assert.match(main, /window\.FD\?\.city/);
+  assert.match(main, /window\.FD\?\.minyanimUrl/);
+  assert.match(main, /t\.style\.display=e\?\`\`:\`none\`/);
+  assert.match(main, /n\.havdalahTimes\|\|\[\{label:\`60 min\`/);
+  assert.match(main, /\.join\(\` \`\)/);
+  const phone = readFileSync("public/assets/phone/app.js", "utf8");
+  for (const path of ["/api/settings", "/api/household", "/api/admin/households", "/api/geo/search?q="]) assert.ok(phone.includes(path));
+  for (const copy of ["Secret address in iCal format", "anyone with the link can view", "12 hours", "Save settings", "End Shabbos mode at"]) assert.ok(phone.includes(copy));
+  const auth = asset("auto-update-");
+  assert.ok(auth.includes("![6,8].includes(t.length)"));
+  assert.ok(auth.includes("t.length<8"));
+});
+
+test("Shabbat havdalah rendering preserves legacy rows and supports custom opinions", () => {
+  const main = asset("main-");
+  const source = main.slice(main.indexOf("function x(n)"), main.indexOf("function S(e)", main.indexOf("function x(n)")));
+  const data = { zmanim: { today: [], tomorrow: [] }, weatherLoaded: false };
+  const app = {
+    now: () => new Date("2026-01-01T12:00:00Z"), weatherNow: () => ({}), esc: (v) => v,
+    dayOfMonth: () => 1, hebDate: () => "", fmt: { time: (v) => v.toISOString(), ampm: () => "", day: () => "", month: () => "" }
+  };
+  const render = new Function("e", "t", "return (" + source + ")")(data, app);
+  const window = { end: "2026-01-03T23:00:00Z", havdalah60: "2026-01-03T22:48:00Z", havdalah72: "2026-01-03T23:00:00Z" };
+  const rows = (w) => render(w).match(/<div class="kodesh-havdalah">([\s\S]*?)<\/div>/)[1];
+  const legacy = '<span>Havdalah 60 min <b>2026-01-03T22:48:00.000Z</b></span> <span>72 min <b>2026-01-03T23:00:00.000Z</b></span>';
+  assert.equal(rows(window), legacy);
+  assert.equal(rows({ ...window, havdalahTimes: [{ label: "60 min", time: window.havdalah60 }, { label: "72 min", time: window.havdalah72 }] }), legacy);
+  assert.equal(rows({ ...window, havdalahTimes: [{ label: "8.5°", time: window.end }] }), '<span>Havdalah 8.5° <b>2026-01-03T23:00:00.000Z</b></span>');
+  assert.equal(rows({ ...window, havdalahTimes: [] }), "");
+});
+
 test("phone page loads its readable source assets", () => {
   const html = readFileSync("public/m.html", "utf8");
-  assert.match(html, /src="\/assets\/phone\/app\.js\?v=2"/);
-  assert.match(html, /href="\/assets\/phone\/phone\.css"/);
+  assert.match(html, /src="\/assets\/phone\/app\.js\?v=3"/);
+  assert.match(html, /href="\/assets\/phone\/phone\.css\?v=2"/);
   assert.doesNotMatch(html, /mobile-[\w-]+\.(?:js|css)/);
+});
+
+test("weather detail renders the household city safely and defaults to Toronto", () => {
+  const main = asset("main-");
+  const start = main.indexOf("function d(){var i=e.weather");
+  const source = main.slice(start, main.indexOf("function f(e)", start));
+  const app = { esc: (v) => v.replaceAll("<", "&lt;"), icon: () => "", weatherNow: () => ({ hi: 20, lo: 10, temp: 16 }) };
+  const render = new Function("App", "window", "e", "t", "n", "l", "r", "return (" + source + ")()");
+  const weather = (window) => render(app, window, { weather: {} }, { sel: 0, hover: null, hours: [] }, {}, () => null, () => "");
+  assert.match(weather({ FD: { city: "Jerusalem, Israel" } }), /Jerusalem, Israel · H 20°/);
+  assert.match(weather({ FD: { city: "<city>" } }), /&lt;city>/);
+  assert.match(weather({}), /Toronto · H 20°/);
+  assert.match(weather({ FD: { city: "" } }), /Toronto · H 20°/);
 });
 
 test("frame loads the lazy local music player", () => {

@@ -30,7 +30,7 @@ function householdSettings(value = {}, env = {}, hid = 1) {
     },
     calendars: value.calendars?.length ? value.calendars : hid === 1 ? JSON.parse(env.CALENDARS || "[]") : [],
     zmanim: { candles: 18, havdalah: [60, 72], shabbosEnds: 72, shema: "both", dafYomi: true, ...value.zmanim },
-    minyanimUrl: value.minyanimUrl || ""
+    minyanimUrl: value.minyanimUrl ?? (hid === 1 ? "https://torontominyanim.com/" : "")
   };
 }
 function validSettings(value) {
@@ -974,7 +974,8 @@ function isKodeshWindowActive(windows, now = Date.now()) {
   return (windows || []).some((window) => new Date(window.start).getTime() <= now && new Date(window.end).getTime() > now);
 }
 async function stateVersions(env) {
-  const result = await env.DB.prepare("SELECT key, updated FROM state").all();
+  const result = await env.DB.prepare("SELECT key, updated FROM state WHERE key IN (SELECT value FROM json_each(?))")
+    .bind(JSON.stringify(Array.from(STATE_KEYS, (key) => ns(env.household.id, key)))).all();
   const keys = {};
   (result.results || []).forEach((row) => {
     const prefix = env.household.id === 1 ? "" : `h${env.household.id}:`;
@@ -1439,7 +1440,8 @@ var index_default = {
       const response = await env.ASSETS.fetch(new Request(new URL(path, request.url), request));
       const settings = household?.settings || householdSettings({}, {}, 0);
       const fd = JSON.stringify({ tz: settings.location.tz, city: settings.location.name, admin: household?.id === 1, minyanimUrl: settings.minyanimUrl }).replaceAll("<", "\\u003c");
-      const result = new HTMLRewriter().on("head", { element(element) { element.append(`<script>window.FD=${fd}</script>`, { html: true }); } }).transform(response);
+      const transformed = new HTMLRewriter().on("head", { element(element) { element.append(`<script>window.FD=${fd}</script>`, { html: true }); } }).transform(response);
+      const result = new Response(transformed.body, transformed);
       result.headers.set("cache-control", "private, no-store");
       return result;
     };

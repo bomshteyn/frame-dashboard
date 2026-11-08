@@ -111,8 +111,8 @@ import { subscribeStateVersions } from "./state-poll.js";
       if (!next) return windowsLoaded ? "Next: not available" : "Next: loading…";
       var start = new Date(next.start);
       var warn = new Date(start.getTime() - 15 * 60 * 1000);
-      var day = new Intl.DateTimeFormat("en-US", { timeZone: "America/Toronto", weekday: "long" }).format(start);
-      var time = new Intl.DateTimeFormat("en-US", { timeZone: "America/Toronto", hour: "numeric", minute: "2-digit" });
+      var day = new Intl.DateTimeFormat("en-US", { timeZone: window.FD?.tz || "America/Toronto", weekday: "long" }).format(start);
+      var time = new Intl.DateTimeFormat("en-US", { timeZone: window.FD?.tz || "America/Toronto", hour: "numeric", minute: "2-digit" });
       return "Next: " + day + " " + time.format(warn) + " and " + time.format(start);
     }
     function body() {
@@ -251,11 +251,11 @@ import { subscribeStateVersions } from "./state-poll.js";
       if (!upcoming) return "On";
       var start = new Date(upcoming.start);
       var day = new Intl.DateTimeFormat("en-US", {
-        timeZone: "America/Toronto",
+        timeZone: window.FD?.tz || "America/Toronto",
         weekday: "short"
       }).format(start);
       var time = new Intl.DateTimeFormat("en-US", {
-        timeZone: "America/Toronto",
+        timeZone: window.FD?.tz || "America/Toronto",
         hour: "numeric",
         minute: "2-digit"
       }).format(start);
