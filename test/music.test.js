@@ -6,7 +6,7 @@ import worker, { musicTiles, musicToken } from "../worker/index.js";
 
 function database() {
   const sqlite = new DatabaseSync(":memory:");
-  for (const file of ["0000_initial.sql", "0001_photo_seen.sql", "0002_photo_hidden.sql", "0003_music.sql"]) {
+  for (const file of ["0000_initial.sql", "0001_photo_seen.sql", "0002_photo_hidden.sql", "0003_music.sql", "0004_households.sql"]) {
     sqlite.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
   }
   const statement = (sql, args = []) => ({
@@ -86,9 +86,9 @@ test("profile listing uses form encoding and the frame device headers", async ()
   const form = new URLSearchParams(request.init.body);
   assert.equal(form.get("email"), "family@example.test");
   assert.equal(form.get("password"), "password-not-persisted");
-  assert.equal(request.init.headers.get("X-DEVICE-ID"), env.DB.sqlite.prepare("SELECT device_id FROM music_auth WHERE id = 1").get().device_id);
+  assert.equal(request.init.headers.get("X-DEVICE-ID"), env.DB.sqlite.prepare("SELECT device_id FROM household_music_auth WHERE hid = 1").get().device_id);
   assert.equal(request.init.headers.get("authorization"), null);
-  assert.equal(env.DB.sqlite.prepare("SELECT COUNT(*) count FROM music_auth").get().count, 1);
+  assert.equal(env.DB.sqlite.prepare("SELECT COUNT(*) count FROM household_music_auth").get().count, 1);
 });
 
 test("login stores the token and profile but never the password", async () => {
@@ -96,7 +96,7 @@ test("login stores the token and profile but never the password", async () => {
   const password = "dont-store-this-password";
   let firstDeviceId;
   await worker.fetch(apiRequest("/api/music/status", { cookie }), env);
-  firstDeviceId = DB.sqlite.prepare("SELECT device_id FROM music_auth WHERE id = 1").get().device_id;
+  firstDeviceId = DB.sqlite.prepare("SELECT device_id FROM household_music_auth WHERE hid = 1").get().device_id;
   const response = await withFetch(async (url, init) => {
     assert.equal(String(url), "https://24six.app/api/v3/login");
     assert.equal(new URLSearchParams(init.body).get("password"), password);
@@ -115,13 +115,13 @@ test("login stores the token and profile but never the password", async () => {
     ok: true,
     profile: { id: 27, name: "Maya", img: "https://images.test/maya.jpg" }
   });
-  const saved = DB.sqlite.prepare("SELECT token, device_id, profile_json, email FROM music_auth WHERE id = 1").get();
+  const saved = DB.sqlite.prepare("SELECT token, device_id, profile_json, email FROM household_music_auth WHERE hid = 1").get();
   assert.equal(saved.token, "profile-token-value-long-enough-to-stay-private");
   assert.equal(saved.device_id, firstDeviceId);
   assert.deepEqual(JSON.parse(saved.profile_json), { id: 27, name: "Maya", img: "https://images.test/maya.jpg" });
   assert.equal(saved.email, "family@example.test");
   assert.equal(Object.hasOwn(saved, "password"), false);
-  assert.equal(DB.sqlite.prepare("PRAGMA table_info(music_auth)").all().some((column) => column.name === "password"), false);
+  assert.equal(DB.sqlite.prepare("PRAGMA table_info(household_music_auth)").all().some((column) => column.name === "password"), false);
 });
 
 test("token extraction prioritizes known keys then uses a long-string fallback", () => {
@@ -132,7 +132,7 @@ test("token extraction prioritizes known keys then uses a long-string fallback",
 
 test("an upstream 401 becomes 403 relogin and clears the saved token", async () => {
   const { DB, env, cookie } = await authenticated();
-  DB.sqlite.prepare("INSERT INTO music_auth (id, token, device_id, profile_json, email, updated) VALUES (1, ?, ?, ?, ?, ?)")
+  DB.sqlite.prepare("INSERT INTO household_music_auth (hid, token, device_id, profile_json, email, updated) VALUES (1, ?, ?, ?, ?, ?)")
     .run("expired-token", "00000000-0000-4000-8000-000000000001", JSON.stringify({ id: 1, name: "Maya", img: null }), "family@example.test", Date.now());
   const response = await withFetch(async (_url, init) => {
     assert.equal(init.headers.get("authorization"), "Bearer expired-token");
@@ -141,24 +141,24 @@ test("an upstream 401 becomes 403 relogin and clears the saved token", async () 
 
   assert.equal(response.status, 403);
   assert.deepEqual(await response.json(), { error: "24six login expired", relogin: true });
-  assert.equal(DB.sqlite.prepare("SELECT token FROM music_auth WHERE id = 1").get().token, null);
+  assert.equal(DB.sqlite.prepare("SELECT token FROM household_music_auth WHERE hid = 1").get().token, null);
 });
 
 test("logout uses the exact 24six logout URL", async () => {
   const { DB, env, cookie } = await authenticated();
-  DB.sqlite.prepare("INSERT INTO music_auth (id, token, device_id, updated) VALUES (1, ?, ?, ?)")
+  DB.sqlite.prepare("INSERT INTO household_music_auth (hid, token, device_id, updated) VALUES (1, ?, ?, ?)")
     .run("valid-token", "00000000-0000-4000-8000-000000000005", Date.now());
   const response = await withFetch(async (url) => {
     assert.equal(String(url), "https://24six.app/api/v3/logout");
     return upstreamResponse({ ok: true });
   }, () => worker.fetch(apiRequest("/api/music/logout", { method: "POST", body: {}, cookie }), env));
   assert.equal(response.status, 200);
-  assert.equal(DB.sqlite.prepare("SELECT token FROM music_auth WHERE id = 1").get().token, null);
+  assert.equal(DB.sqlite.prepare("SELECT token FROM household_music_auth WHERE hid = 1").get().token, null);
 });
 
 test("stream URL comes from the play redirect and metadata comes from the content response", async () => {
   const { DB, env, cookie } = await authenticated();
-  DB.sqlite.prepare("INSERT INTO music_auth (id, token, device_id, updated) VALUES (1, ?, ?, ?)")
+  DB.sqlite.prepare("INSERT INTO household_music_auth (hid, token, device_id, updated) VALUES (1, ?, ?, ?)")
     .run("valid-token", "00000000-0000-4000-8000-000000000002", Date.now());
   const metadata = {
     metadata: { id: 42, title: "Metadata Song", artist: { name: "The Artist" }, img: "https://images.test/cover.jpg", duration: 190 }
@@ -196,7 +196,7 @@ test("stream URL comes from the play redirect and metadata comes from the conten
 
 test("stream URL falls back to a nested m3u8 in the play response", async () => {
   const { DB, env, cookie } = await authenticated();
-  DB.sqlite.prepare("INSERT INTO music_auth (id, token, device_id, updated) VALUES (1, ?, ?, ?)")
+  DB.sqlite.prepare("INSERT INTO household_music_auth (hid, token, device_id, updated) VALUES (1, ?, ?, ?)")
     .run("valid-token", "00000000-0000-4000-8000-000000000008", Date.now());
   const metadata = { metadata: { id: 42, title: "Fallback Song", artist: { name: "The Artist" } } };
   const playPayload = {
@@ -221,7 +221,7 @@ test("stream URL falls back to a nested m3u8 in the play response", async () => 
 
 test("a play endpoint 401 clears the token and requires relogin", async () => {
   const { DB, env, cookie } = await authenticated();
-  DB.sqlite.prepare("INSERT INTO music_auth (id, token, device_id, updated) VALUES (1, ?, ?, ?)")
+  DB.sqlite.prepare("INSERT INTO household_music_auth (hid, token, device_id, updated) VALUES (1, ?, ?, ?)")
     .run("expired-token", "00000000-0000-4000-8000-000000000009", Date.now());
   const response = await withFetch(async (url, init) => {
     if (String(url) === "https://24six.app/api/v3/music/content/42") return upstreamResponse({ title: "Song" });
@@ -232,7 +232,7 @@ test("a play endpoint 401 clears the token and requires relogin", async () => {
 
   assert.equal(response.status, 403);
   assert.deepEqual(await response.json(), { error: "24six login expired", relogin: true });
-  assert.equal(DB.sqlite.prepare("SELECT token FROM music_auth WHERE id = 1").get().token, null);
+  assert.equal(DB.sqlite.prepare("SELECT token FROM household_music_auth WHERE hid = 1").get().token, null);
 });
 
 test("musicTiles normalizes nested tracks", () => {
@@ -262,7 +262,7 @@ test("music commands and now-playing states are available through state sync", a
 
 test("home groups section arrays and search serializes type arrays", async () => {
   const { DB, env, cookie } = await authenticated();
-  DB.sqlite.prepare("INSERT INTO music_auth (id, token, device_id, updated) VALUES (1, ?, ?, ?)")
+  DB.sqlite.prepare("INSERT INTO household_music_auth (hid, token, device_id, updated) VALUES (1, ?, ?, ?)")
     .run("valid-token", "00000000-0000-4000-8000-000000000003", Date.now());
   const home = { sections: [{ title: "Daily Mix", items: [{ id: 11, title: "One", type: "music" }] }, { title: "For you", items: [{ id: 12, title: "Two", type: "content" }] }] };
   const homeResponse = await withFetch(async () => upstreamResponse(home), () => worker.fetch(apiRequest("/api/music/home?debug=1", { cookie }), env));
@@ -319,7 +319,7 @@ test("home groups section arrays and search serializes type arrays", async () =>
 
 test("catalog browse routes use exact upstream URLs and preserve pagination data", async () => {
   const { DB, env, cookie } = await authenticated();
-  DB.sqlite.prepare("INSERT INTO music_auth (id, token, device_id, updated) VALUES (1, ?, ?, ?)")
+  DB.sqlite.prepare("INSERT INTO household_music_auth (hid, token, device_id, updated) VALUES (1, ?, ?, ?)")
     .run("valid-token", "00000000-0000-4000-8000-000000000006", Date.now());
   const kinds = ["artist", "collection", "playlist", "category"];
   for (const kind of kinds) {
@@ -349,7 +349,7 @@ test("catalog browse routes use exact upstream URLs and preserve pagination data
 
 test("category detail uses the music/category upstream route", async () => {
   const { DB, env, cookie } = await authenticated();
-  DB.sqlite.prepare("INSERT INTO music_auth (id, token, device_id, updated) VALUES (1, ?, ?, ?)")
+  DB.sqlite.prepare("INSERT INTO household_music_auth (hid, token, device_id, updated) VALUES (1, ?, ?, ?)")
     .run("valid-token", "00000000-0000-4000-8000-000000000007", Date.now());
   const response = await withFetch(async (url) => {
     assert.equal(String(url), "https://24six.app/api/v3/music/category/17");
@@ -363,7 +363,7 @@ test("category detail uses the music/category upstream route", async () => {
 
 test("music upstream errors preserve the message and status", async () => {
   const { DB, env, cookie } = await authenticated();
-  DB.sqlite.prepare("INSERT INTO music_auth (id, token, device_id, updated) VALUES (1, ?, ?, ?)")
+  DB.sqlite.prepare("INSERT INTO household_music_auth (hid, token, device_id, updated) VALUES (1, ?, ?, ?)")
     .run("valid-token", "00000000-0000-4000-8000-000000000004", Date.now());
   const response = await withFetch(async (url) => {
     assert.equal(String(url), "https://24six.app/api/v3/profile/swap");

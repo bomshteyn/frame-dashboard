@@ -18,6 +18,118 @@ var SESSION_SECONDS = 365 * 24 * 60 * 60;
 var LOGIN_WINDOW_MS = 15 * 60 * 1e3;
 var LOGIN_MAX_FAILURES = 5;
 var enc = new TextEncoder();
+function ns(hid, name) {
+  return hid === 1 ? name : `h${hid}:${name}`;
+}
+function householdSettings(value = {}, env = {}, hid = 1) {
+  return {
+    location: { geonameid: 6167865, name: "Toronto", lat: 43.70643, lon: -79.39864, tz: TORONTO, israel: false, ...value.location },
+    photos: {
+      main: value.photos?.main || (hid === 1 ? env.PHOTOS_ALBUM_URL || "" : ""),
+      shabbat: value.photos?.shabbat || (hid === 1 ? env.SHABBAT_ALBUM_URL || "" : "")
+    },
+    calendars: value.calendars?.length ? value.calendars : hid === 1 ? JSON.parse(env.CALENDARS || "[]") : [],
+    zmanim: { candles: 18, havdalah: [60, 72], shabbosEnds: 72, shema: "both", dafYomi: true, ...value.zmanim },
+    minyanimUrl: value.minyanimUrl || ""
+  };
+}
+function validSettings(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const https = (s) => {
+    if (typeof s !== "string") return false;
+    if (!s) return true;
+    try { return new URL(s).protocol === "https:"; } catch (_) { return false; }
+  };
+  const loc = value.location;
+  const z = value.zmanim;
+  const opinion = (v) => [42, 50, 60, 72, "8.5deg"].includes(v);
+  if (!loc || !Number.isSafeInteger(loc.geonameid) || loc.geonameid <= 0 || typeof loc.name !== "string" || !loc.name.trim() ||
+      !Number.isFinite(loc.lat) || Math.abs(loc.lat) > 90 || !Number.isFinite(loc.lon) || Math.abs(loc.lon) > 180 ||
+      typeof loc.israel !== "boolean" || typeof loc.tz !== "string") return false;
+  try { new Intl.DateTimeFormat("en", { timeZone: loc.tz }); } catch (_) { return false; }
+  return !!value.photos && https(value.photos.main) && https(value.photos.shabbat) && https(value.minyanimUrl) &&
+    Array.isArray(value.calendars) && value.calendars.every((c) => c && typeof c.person === "string" && !!c.url && https(c.url)) &&
+    !!z && Number.isInteger(z.candles) && z.candles >= 0 && z.candles <= 120 &&
+    Array.isArray(z.havdalah) && z.havdalah.length > 0 && z.havdalah.length <= 5 && z.havdalah.every(opinion) &&
+    new Set(z.havdalah).size === z.havdalah.length && opinion(z.shabbosEnds) &&
+    ["both", "mga", "gra"].includes(z.shema) && typeof z.dafYomi === "boolean";
+}
+async function loadHousehold(env, id) {
+  const row = await env.DB.prepare("SELECT id, name, settings FROM household WHERE id = ?").bind(id).first();
+  return row ? { ...row, settings: householdSettings(JSON.parse(row.settings), env, id) } : null;
+}
+async function householdRoute(request, env, url) {
+  const h = env.household;
+  if (url.pathname === "/api/household" && request.method === "GET") return json({ id: h.id, name: h.name, admin: h.id === 1, tz: h.settings.location.tz, city: h.settings.location.name, minyanimUrl: h.settings.minyanimUrl });
+  if (url.pathname === "/api/settings") {
+    if (request.method === "GET") return json(h.settings);
+    if (request.method !== "PUT") return json({ error: "Method not allowed" }, 405);
+    const value = await request.json().catch(() => null);
+    if (!validSettings(value)) return json({ error: "Invalid settings" }, 400);
+    const key = ns(h.id, "remote");
+    const now = Date.now();
+    const row = await env.DB.prepare("SELECT json, updated FROM state WHERE key = ?").bind(key).first();
+    const remote = { seq: (Number(row ? JSON.parse(row.json)?.seq : 0) || 0) + 1, cmd: "reload", arg: "", at: now };
+    await env.DB.batch([
+      env.DB.prepare("UPDATE household SET settings = ? WHERE id = ?").bind(JSON.stringify(value), h.id),
+      env.DB.prepare("INSERT INTO state (key, json, updated) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET json = excluded.json, updated = excluded.updated").bind(key, JSON.stringify(remote), Math.max(now, (row?.updated || 0) + 1))
+    ]);
+    return json(value);
+  }
+  if (url.pathname === "/api/geo/search" && request.method === "GET") {
+    const q = (url.searchParams.get("q") || "").trim().slice(0, 100);
+    if (!q) return json([]);
+    const cities = await cachedJson(`https://www.hebcal.com/complete.php?q=${encodeURIComponent(q)}`, 86400);
+    return json(await Promise.all(cities.filter((c) => c.geo === "geoname").slice(0, 8).map(async (c) => {
+      const data = await cachedJson(`https://www.hebcal.com/zmanim?cfg=json&geonameid=${c.id}`, 86400);
+      const l = data.location;
+      return { geonameid: Number(c.id), name: c.value, lat: l.latitude, lon: l.longitude, tz: l.tzid, israel: l.cc === "IL" };
+    })));
+  }
+  if (!url.pathname.startsWith("/api/admin/households")) return null;
+  if (h.id !== 1) return json({ error: "Forbidden" }, 403);
+  const match = /^\/api\/admin\/households(?:\/(\d+)(\/pin)?)?$/.exec(url.pathname);
+  if (!match) return json({ error: "Not found" }, 404);
+  const id = Number(match[1]);
+  if (!id && request.method === "GET") return json((await env.DB.prepare("SELECT id, name, created FROM household ORDER BY id").all()).results);
+  const body = ["POST", "PATCH"].includes(request.method) ? await request.json().catch(() => null) : null;
+  if ((!id && request.method === "POST") || (id && !match[2] && request.method === "PATCH")) {
+    if (typeof body?.name !== "string" || !body.name.trim() || body.name.length > 100) return json({ error: "Name required" }, 400);
+  }
+  if (id && !await env.DB.prepare("SELECT id FROM household WHERE id = ?").bind(id).first()) return json({ error: "Not found" }, 404);
+  if (request.method === "POST" && (!id || match[2])) {
+    if (id === 1) return json({ error: "Household 1 uses FAMILY_PIN" }, 400);
+    let pin, hash;
+    do {
+      hash = null;
+      const n = crypto.getRandomValues(new Uint32Array(1))[0];
+      if (n >= 4230000000) continue;
+      pin = String(10000000 + n % 90000000);
+      hash = await sessionSignature(env.SESSION_SECRET, "pin:" + pin);
+    } while (!hash || pin === env.FAMILY_PIN || await env.DB.prepare("SELECT id FROM household WHERE pin_hash = ?").bind(hash).first());
+    if (id) await env.DB.prepare("UPDATE household SET pin_hash = ? WHERE id = ?").bind(hash, id).run();
+    else {
+      const row = await env.DB.prepare("INSERT INTO household (name, pin_hash, created) VALUES (?, ?, ?) RETURNING id").bind(body.name.trim(), hash, Date.now()).first();
+      return json({ id: row.id, pin }, 201);
+    }
+    return json({ id, pin });
+  }
+  if (id && !match[2] && request.method === "PATCH") {
+    await env.DB.prepare("UPDATE household SET name = ? WHERE id = ?").bind(body.name.trim(), id).run();
+    return json({ ok: true });
+  }
+  if (id && !match[2] && request.method === "DELETE") {
+    if (id === 1) return json({ error: "Cannot delete household 1" }, 400);
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM state WHERE key LIKE ?").bind(`h${id}:%`),
+      ...["album_photo", "album_scan", "photo_seen", "photo_hidden"].map((t) => env.DB.prepare(`DELETE FROM ${t} WHERE album LIKE ?`).bind(`h${id}:%`)),
+      env.DB.prepare("DELETE FROM household_music_auth WHERE hid = ?").bind(id),
+      env.DB.prepare("DELETE FROM household WHERE id = ?").bind(id)
+    ]);
+    return json({ ok: true });
+  }
+  return json({ error: "Method not allowed" }, 405);
+}
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -49,7 +161,7 @@ function asISO(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
-function localDateTimeToEpoch(value, endOfDay = false) {
+function localDateTimeToEpoch(value, endOfDay = false, tz = TORONTO) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!match) return new Date(value).getTime();
   const [year, month, day] = match.slice(1).map(Number);
@@ -57,7 +169,7 @@ function localDateTimeToEpoch(value, endOfDay = false) {
   let epoch = Date.UTC(year, month - 1, day, hour);
   for (let i = 0; i < 3; i++) {
     const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: TORONTO,
+      timeZone: tz,
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
@@ -123,21 +235,21 @@ function iconFor(code, isDay) {
   if (code >= 95) return "rain";
   return "cloud";
 }
-function weatherUrl() {
+function weatherUrl(settings = householdSettings()) {
   const params = new URLSearchParams({
-    latitude: "43.70643",
-    longitude: "-79.39864",
+    latitude: String(settings.location.lat),
+    longitude: String(settings.location.lon),
     current: "temperature_2m,weather_code,is_day,relative_humidity_2m,apparent_temperature,wind_speed_10m",
     hourly: "temperature_2m,weather_code,precipitation_probability,is_day",
     daily: "temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max",
-    timezone: TORONTO,
+    timezone: settings.location.tz,
     forecast_days: "7"
   });
   return `https://api.open-meteo.com/v1/forecast?${params}`;
 }
-async function weather(request) {
-  const value = await cachedJson(weatherUrl(), 900);
-  const today = dateString(dateParts(new Date()));
+async function weather(request, settings) {
+  const value = await cachedJson(weatherUrl(settings), 900);
+  const today = dateString(dateParts(new Date(), settings.location.tz));
   const hours = new Map();
   (value.hourly?.time || []).forEach((time, index) => {
     hours.set(time.slice(0, 13), index);
@@ -154,7 +266,7 @@ async function weather(request) {
   const dailyIndex = (value.daily?.time || []).indexOf(today);
   const current = value.current || {};
   const nowParts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: TORONTO,
+    timeZone: settings.location.tz,
     hour: "2-digit",
     hourCycle: "h23"
   }).formatToParts(new Date());
@@ -168,10 +280,10 @@ async function weather(request) {
   });
   const next24 = [];
   for (let i = 0; i < 24; i++) {
-    const time = new Date(localDateTimeToEpoch(today) + (localHour + i) * 36e5);
-    const parts = dateParts(time);
+    const time = new Date(localDateTimeToEpoch(today, false, settings.location.tz) + (localHour + i) * 36e5);
+    const parts = dateParts(time, settings.location.tz);
     const hourParts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: TORONTO,
+      timeZone: settings.location.tz,
       hour: "2-digit",
       hourCycle: "h23"
     }).formatToParts(time);
@@ -208,7 +320,7 @@ async function weather(request) {
     })
   });
 }
-function buildKodeshWindows(items) {
+function buildKodeshWindows(items, endMinutes = 72) {
   const sorted = items.slice().sort((a, b) => new Date(a.date) - new Date(b.date));
   const windows = [];
   let open = null;
@@ -237,30 +349,33 @@ function buildKodeshWindows(items) {
       if (entry.category === "parashat" && !parashat) parashat = entry.title;
     });
     const end = new Date(time);
-    const havdalah60 = new Date(end.getTime() - 12 * 6e4).toISOString();
+    const sunset = end.getTime() - endMinutes * 6e4;
+    const havdalah60 = new Date(sunset + 60 * 6e4).toISOString();
+    const havdalah72 = new Date(sunset + 72 * 6e4).toISOString();
     const title = holidays.length ? holidays.join(" \xB7 ") : ["Shabbat", parashat].filter(Boolean).join(" \xB7 ");
-    windows.push({ start: open.start, end: time, havdalah60, havdalah72: time, title, yomtov: holidays.length > 0, yomKippur });
+    windows.push({ start: open.start, end: time, havdalah60, havdalah72, title, yomtov: holidays.length > 0, yomKippur });
     open = null;
   });
   return windows;
 }
 function upcomingWindow(windows, now = Date.now()) {
   const next = windows.find((window) => new Date(window.end).getTime() > now);
-  if (!next) return { candles: null, havdalah: null, havdalah60: null, havdalah72: null, title: "", yomtov: false, yomKippur: false };
+  if (!next) return { candles: null, havdalah: null, havdalah60: null, havdalah72: null, havdalahTimes: [], title: "", yomtov: false, yomKippur: false };
   return {
     candles: next.start,
     havdalah: next.end,
     havdalah60: next.havdalah60,
     havdalah72: next.havdalah72,
+    havdalahTimes: next.havdalahTimes || [],
     title: next.title,
     yomtov: next.yomtov,
     yomKippur: next.yomKippur
   };
 }
-function zmanimUrl(date) {
-  return `https://www.hebcal.com/zmanim?cfg=json&geonameid=6167865&date=${date}`;
+function zmanimUrl(date, settings) {
+  return `https://www.hebcal.com/zmanim?cfg=json&geonameid=${settings.location.geonameid}&date=${date}`;
 }
-function hebcalUrl(start, end) {
+function hebcalUrl(start, end, settings) {
   const params = new URLSearchParams({
     v: "1",
     cfg: "json",
@@ -272,12 +387,13 @@ function hebcalUrl(start, end) {
     mf: "off",
     s: "on",
     c: "on",
-    b: "18",
-    m: "72",
-    geonameid: "6167865",
+    b: String(settings.zmanim.candles),
+    geonameid: String(settings.location.geonameid),
     start,
     end
   });
+  if (settings.location.israel) params.set("i", "on");
+  params.set(settings.zmanim.shabbosEnds === "8.5deg" ? "M" : "m", settings.zmanim.shabbosEnds === "8.5deg" ? "on" : String(settings.zmanim.shabbosEnds));
   return `https://www.hebcal.com/hebcal?${params}`;
 }
 function dafYomiUrl(start, end) {
@@ -298,26 +414,42 @@ function dafYomiUrl(start, end) {
   });
   return `https://www.hebcal.com/hebcal?${params}`;
 }
-function zmanimList(times) {
-  return ZMANIM.map(([key, label]) => {
+function zmanimList(times, settings) {
+  return ZMANIM.filter(([key]) => !(key === "sofZmanShmaMGA" && settings.zmanim.shema === "gra") && !(key === "sofZmanShma" && settings.zmanim.shema === "mga")).map(([key, label]) => {
     const value = key === "tzeit7083deg" ? times.tzeit7083deg || times.tzeit85deg : times[key];
     const time = asISO(value);
     return time ? { key, label, time } : null;
   }).filter(Boolean);
 }
-async function zmanimData(fetcher = fetch) {
-  const today = dateString(dateParts(new Date()));
+async function zmanimData(fetcher = fetch, settings = householdSettings()) {
+  const today = dateString(dateParts(new Date(), settings.location.tz));
   const tomorrow = addDate(today, 1);
   const calendarStart = addDate(today, -3);
   const calendarEnd = addDate(today, 45);
   const getJson = (url) => cachedJson(url, 21600, fetcher);
   const [todayData, tomorrowData, holidays, dafYomi] = await Promise.all([
-    getJson(zmanimUrl(today)),
-    getJson(zmanimUrl(tomorrow)),
-    getJson(hebcalUrl(calendarStart, calendarEnd)),
-    getJson(dafYomiUrl(today, tomorrow)).catch(() => ({ items: [] }))
+    getJson(zmanimUrl(today, settings)),
+    getJson(zmanimUrl(tomorrow, settings)),
+    getJson(hebcalUrl(calendarStart, calendarEnd, settings)),
+    settings.zmanim.dafYomi ? getJson(dafYomiUrl(today, tomorrow)).catch(() => ({ items: [] })) : Promise.resolve({ items: [] })
   ]);
-  const windows = buildKodeshWindows(holidays.items || []);
+  const ends = settings.zmanim.shabbosEnds;
+  const windows = buildKodeshWindows(holidays.items || [], typeof ends === "number" ? ends : 72);
+  await Promise.all(windows.map(async (window) => {
+    let sunset = new Date(window.havdalah72).getTime() - 72 * 6e4;
+    let degrees;
+    if (ends === "8.5deg" || settings.zmanim.havdalah.includes("8.5deg")) {
+      const day = dateString(dateParts(new Date(window.end), settings.location.tz));
+      const data = await getJson(zmanimUrl(day, settings));
+      sunset = new Date(data.times.sunset).getTime();
+      degrees = asISO(data.times.tzeit85deg);
+      if (!Number.isFinite(sunset) || !degrees) throw new Error("Havdalah unavailable");
+    }
+    const at = (m) => m === "8.5deg" ? degrees : new Date(sunset + m * 6e4).toISOString();
+    window.havdalah60 = at(60);
+    window.havdalah72 = at(72);
+    window.havdalahTimes = settings.zmanim.havdalah.map((m) => ({ label: m === "8.5deg" ? "8.5°" : `${m} min`, minutes: m === "8.5deg" ? null : m, time: at(m) }));
+  }));
   const daf = {};
   (Array.isArray(dafYomi.items) ? dafYomi.items : []).forEach((item) => {
     if (item.category === "dafyomi" && /^\d{4}-\d{2}-\d{2}$/.test(item.date) && typeof item.title === "string") {
@@ -325,22 +457,22 @@ async function zmanimData(fetcher = fetch) {
     }
   });
   return {
-    today: zmanimList(todayData.times || {}),
-    tomorrow: zmanimList(tomorrowData.times || {}),
+    today: zmanimList(todayData.times || {}, settings),
+    tomorrow: zmanimList(tomorrowData.times || {}, settings),
     windows,
     upcoming: upcomingWindow(windows),
     daf
   };
 }
-async function zmanim() {
-  return json(await zmanimData());
+async function zmanim(settings) {
+  return json(await zmanimData(fetch, settings));
 }
-function validDateRange(url) {
-  const today = dateString(dateParts(new Date()));
+function validDateRange(url, settings) {
+  const today = dateString(dateParts(new Date(), settings.location.tz));
   const from = url.searchParams.get("from") || addDate(today, -1);
   const to = url.searchParams.get("to") || addDate(today, 35);
-  const start = localDateTimeToEpoch(from);
-  const end = localDateTimeToEpoch(/^\d{4}-\d{2}-\d{2}$/.test(to) ? addDate(to, 1) : to);
+  const start = localDateTimeToEpoch(from, false, settings.location.tz);
+  const end = localDateTimeToEpoch(/^\d{4}-\d{2}-\d{2}$/.test(to) ? addDate(to, 1) : to, false, settings.location.tz);
   if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) return null;
   return { start, end };
 }
@@ -350,7 +482,7 @@ function timeISO(time, allDay) {
   }
   return time.toJSDate().toISOString();
 }
-function expandCalendar(ics, person, range) {
+function expandCalendar(ics, person, range, tz = TORONTO) {
   const root = new ICALmodule.Component(ICALmodule.parse(ics));
   const components = root.getAllSubcomponents("vevent");
   const events = [];
@@ -364,8 +496,8 @@ function expandCalendar(ics, person, range) {
       const allDay = start.isDate;
       const startsAt = timeISO(start, allDay);
       const endsAt = timeISO(end, allDay);
-      const startMs = allDay ? localDateTimeToEpoch(startsAt.slice(0, 10)) : new Date(startsAt).getTime();
-      const endMs = allDay ? localDateTimeToEpoch(endsAt.slice(0, 10)) : new Date(endsAt).getTime();
+      const startMs = allDay ? localDateTimeToEpoch(startsAt.slice(0, 10), false, tz) : new Date(startsAt).getTime();
+      const endMs = allDay ? localDateTimeToEpoch(endsAt.slice(0, 10), false, tz) : new Date(endsAt).getTime();
       if (startMs >= rangeEnd || endMs <= rangeStart) return;
       const status = item.component.getFirstPropertyValue("status");
       if (String(status || "").toUpperCase() === "CANCELLED") return;
@@ -409,11 +541,11 @@ function mergeEvents(events) {
   return Array.from(merged.values()).sort((a, b) => a.start.localeCompare(b.start));
 }
 async function calendar(request, env) {
-  const range = validDateRange(new URL(request.url));
+  const range = validDateRange(new URL(request.url), env.household.settings);
   if (!range) return json({ error: "Invalid date range" }, 400);
   let calendars;
   try {
-    calendars = JSON.parse(env.CALENDARS || "[]");
+    calendars = env.household.settings.calendars;
   } catch (_) {
     return json({ error: "Invalid calendar configuration" }, 500);
   }
@@ -425,16 +557,16 @@ async function calendar(request, env) {
       const url = new URL(entry.url.replace(/^webcal:/i, "https:"));
       if (url.protocol !== "https:") return;
       const ics = await cachedText(url.toString(), 600);
-      events.push(...expandCalendar(ics, entry.person, range));
+      events.push(...expandCalendar(ics, entry.person, range, env.household.settings.location.tz));
     } catch (_) {
       return;
     }
   }));
   return json(mergeEvents(events));
 }
-function torontoDateKey(timestamp) {
+function torontoDateKey(timestamp, tz = TORONTO) {
   const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Toronto",
+    timeZone: tz,
     year: "numeric",
     month: "2-digit",
     day: "2-digit"
@@ -513,7 +645,7 @@ function parseBatchExecutePage(body) {
     return null;
   }
 }
-function sharedAlbumPhotos(records, album) {
+function sharedAlbumPhotos(records, album, tz = TORONTO) {
   const photos2 = [];
   const seen = new Set();
   (Array.isArray(records) ? records : []).forEach((item) => {
@@ -525,9 +657,9 @@ function sharedAlbumPhotos(records, album) {
     seen.add(base);
     const width = media[1], height = media[2];
     const orientation = Number.isFinite(width) && Number.isFinite(height) && height > width ? "p" : "l";
-    const photo = { src: `${base}=w1280-h800`, o: orientation, from: "family", tag: album };
+    const photo = { src: `${base}=w1280-h800`, o: orientation, from: "family", tag: album.replace(/^h\d+:/, "") };
     if (typeof item[0] === "string" && /^AF1Qip[A-Za-z0-9_-]+$/.test(item[0])) photo.mk = item[0];
-    if (typeof item[2] === "number" && Number.isFinite(item[2])) photo.date = torontoDateKey(item[2]);
+    if (typeof item[2] === "number" && Number.isFinite(item[2])) photo.date = torontoDateKey(item[2], tz);
     photos2.push(photo);
   });
   return photos2;
@@ -591,7 +723,7 @@ async function finishAlbumScan(db, album, scan, now) {
     ...seenStatements
   ]);
 }
-async function scanAlbum(db, album, shareUrl, fetcher = fetch, now = Date.now()) {
+async function scanAlbum(db, album, shareUrl, fetcher = fetch, now = Date.now(), tz = TORONTO) {
   if (!db || !shareUrl) return;
   let scan;
   try {
@@ -614,7 +746,7 @@ async function scanAlbum(db, album, shareUrl, fetcher = fetch, now = Date.now())
     try {
       if (typeof scan.token !== "string" || !scan.sid || !scan.bl || !scan.aid || !scan.akey) throw new Error("Invalid scan state");
       const page = await fetchNextAlbumPage(scan, fetcher);
-      const photos2 = sharedAlbumPhotos(page.records, album);
+      const photos2 = sharedAlbumPhotos(page.records, album, tz);
       await db.batch([
         ...albumPhotoInsertStatements(db, album, scan.scan_gen, photos2),
         db.prepare("UPDATE album_scan SET token = ?, count = (SELECT COUNT(*) FROM album_photo WHERE album = ? AND gen = ?) WHERE album = ?").bind(page.token, album, scan.scan_gen, album)
@@ -633,7 +765,7 @@ async function scanAlbum(db, album, shareUrl, fetcher = fetch, now = Date.now())
     const gen = (Number(scan && scan.live_gen) || 0) + 1;
     await db.batch([
       db.prepare("INSERT INTO album_scan (album, live_gen, scan_gen, token, sid, bl, aid, akey, started, finished, count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?) ON CONFLICT(album) DO UPDATE SET scan_gen = excluded.scan_gen, token = excluded.token, sid = excluded.sid, bl = excluded.bl, aid = excluded.aid, akey = excluded.akey, started = excluded.started, finished = NULL, count = excluded.count").bind(album, scan ? scan.live_gen : null, gen, page.token, page.sid, page.bl, page.aid, page.akey, now, 0),
-      ...albumPhotoInsertStatements(db, album, gen, sharedAlbumPhotos(page.records, album)),
+      ...albumPhotoInsertStatements(db, album, gen, sharedAlbumPhotos(page.records, album, tz)),
       db.prepare("UPDATE album_scan SET count = (SELECT COUNT(*) FROM album_photo WHERE album = ? AND gen = ?) WHERE album = ?").bind(album, gen, album)
     ]);
   } catch (_) {
@@ -645,7 +777,7 @@ var PHOTO_NEW_ADDED_MS = 30 * 24 * 60 * 60 * 1e3;
 var PHOTO_NEW_TAKEN_MS = 90 * 24 * 60 * 60 * 1e3;
 var PHOTO_RECENTLY_SHOWN_MS = 24 * 60 * 60 * 1e3;
 function albumPhotoRow(row, album) {
-  const photo = { src: row.src, o: row.o === "p" ? "p" : "l", from: "family", tag: album };
+  const photo = { src: row.src, o: row.o === "p" ? "p" : "l", from: "family", tag: album.replace(/^h\d+:/, "") };
   if (row.date) photo.date = row.date;
   return photo;
 }
@@ -658,11 +790,11 @@ async function randomAlbumRows(db, album, gen) {
 }
 // Every batch: up to PHOTO_BATCH_NEW_MAX new photos (recently added to the album or recently taken),
 // filled up with random older photos, preferring ones not shown in the last day.
-async function mixedAlbumRows(db, album, gen, now) {
+async function mixedAlbumRows(db, album, gen, now, tz) {
   const isNew = "(COALESCE(s.added, 0) >= ? OR p.date >= ?)";
   const base = "SELECT p.id, p.src, p.date, p.o FROM album_photo p LEFT JOIN photo_seen s ON s.album = p.album AND s.id = p.id WHERE p.album = ? AND p.gen = ? AND " + NOT_HIDDEN + " AND ";
   const addedSince = now - PHOTO_NEW_ADDED_MS;
-  const takenSince = torontoDateKey(now - PHOTO_NEW_TAKEN_MS);
+  const takenSince = torontoDateKey(now - PHOTO_NEW_TAKEN_MS, tz);
   const [fresh, older] = await db.batch([
     db.prepare(base + isNew + " ORDER BY RANDOM() LIMIT ?").bind(album, gen, addedSince, takenSince, PHOTO_BATCH_NEW_MAX),
     db.prepare(base + "NOT " + isNew + " ORDER BY COALESCE(s.served, 0) >= ?, RANDOM() LIMIT ?").bind(album, gen, addedSince, takenSince, now - PHOTO_RECENTLY_SHOWN_MS, PHOTO_BATCH_SIZE)
@@ -674,14 +806,14 @@ async function mixedAlbumRows(db, album, gen, now) {
   }
   return { rows, fresh: newRows.length };
 }
-async function indexedAlbumPhotos(db, album, now = Date.now()) {
+async function indexedAlbumPhotos(db, album, now = Date.now(), tz = TORONTO) {
   if (!db) return null;
   const scan = await db.prepare("SELECT live_gen, count FROM album_scan WHERE album = ?").bind(album).first();
   if (!scan || scan.live_gen == null) return null;
   let rows, fresh;
-  if (album === "main") {
+  if (album.replace(/^h\d+:/, "") === "main") {
     try {
-      ({ rows, fresh } = await mixedAlbumRows(db, album, scan.live_gen, now));
+      ({ rows, fresh } = await mixedAlbumRows(db, album, scan.live_gen, now, tz));
     } catch (_) {
     }
   }
@@ -696,7 +828,7 @@ async function photos(request, env) {
   const album = url.searchParams.get("album");
   if (album !== "main" && album !== "shabbat") return json({ error: "Unknown album" }, 400);
   try {
-    const indexed = await indexedAlbumPhotos(env.DB, album);
+    const indexed = await indexedAlbumPhotos(env.DB, ns(env.household.id, album), Date.now(), env.household.settings.location.tz);
     if (indexed) return json(indexed);
   } catch (_) {
   }
@@ -705,8 +837,8 @@ async function photos(request, env) {
     try {
       const html = await cachedText(new URL(shareUrl).toString(), 3600);
       const records = sharedMediaRecords(html);
-      const hidden = await hiddenPhotoIds(env.DB, album);
-      const photos2 = sharedAlbumPhotos(records, album).filter((photo) => !hidden.has(photoId(photo.src)));
+      const hidden = await hiddenPhotoIds(env.DB, ns(env.household.id, album));
+      const photos2 = sharedAlbumPhotos(records, album, env.household.settings.location.tz).filter((photo) => !hidden.has(photoId(photo.src)));
       if (photos2.length) {
         return json({ photos: photos2, total: photos2.length });
       }
@@ -727,23 +859,25 @@ async function hiddenPhotoIds(db, album) {
   return new Set(((result && result.results) || []).map((row) => row.id));
 }
 function albumShareUrl(env, album) {
-  return album === "main" ? env.PHOTOS_ALBUM_URL : env.SHABBAT_ALBUM_URL || env.PHOTOS_ALBUM_URL;
+  const photos = env.household.settings.photos;
+  return album === "main" ? photos.main : photos.shabbat || photos.main;
 }
 async function hiddenPhotos(request, env) {
-  const result = await env.DB.prepare("SELECT album, id, src, date, hidden FROM photo_hidden ORDER BY hidden DESC LIMIT 500").all();
-  return json({ photos: result.results || [] });
+  const result = await env.DB.prepare("SELECT album, id, src, date, hidden FROM photo_hidden WHERE album IN (?, ?) ORDER BY hidden DESC LIMIT 500").bind(ns(env.household?.id || 1, "main"), ns(env.household?.id || 1, "shabbat")).all();
+  return json({ photos: (result.results || []).map((p) => ({ ...p, album: p.album.replace(/^h\d+:/, "") })) });
 }
-async function hidePhoto(request, env, hide, editingLocked = async () => isKodeshWindowActive((await zmanimData()).windows)) {
+async function hidePhoto(request, env, hide, editingLocked = async () => isKodeshWindowActive((await zmanimData(fetch, env.household?.settings)).windows)) {
   let body;
   try {
     body = await request.json();
   } catch (_) {
     return json({ error: "Invalid JSON" }, 400);
   }
-  const album = body && body.album;
+  let album = body && body.album;
   const id = photoId(body && body.src);
   if ((album !== "main" && album !== "shabbat") || !id) return json({ error: "Expected { album, src }" }, 400);
   if (await editingLocked()) return json({ error: "Editing is disabled during Shabbat/Yom Tov" }, 423);
+  album = ns(env.household?.id || 1, album);
   if (!hide) {
     await env.DB.prepare("DELETE FROM photo_hidden WHERE album = ? AND id = ?").bind(album, id).run();
     return json({ ok: true });
@@ -757,6 +891,7 @@ async function hidePhoto(request, env, hide, editingLocked = async () => isKodes
   return json({ ok: true });
 }
 async function localPhotoManifest(request, env) {
+  if (env.household && env.household.id !== 1) return json({ photos: [], total: 0 });
   try {
     const manifest = await env.ASSETS.fetch(new Request(new URL("/photos/manifest.json", request.url)));
     if (!manifest.ok) return json({ photos: [], total: 0 });
@@ -790,15 +925,17 @@ function cookieValue(request, name) {
   const pair = (request.headers.get("cookie") || "").split(";").map((value) => value.trim()).find((value) => value.startsWith(`${name}=`));
   return pair ? pair.slice(name.length + 1) : "";
 }
-async function hasSession(request, env) {
+async function sessionHousehold(request, env) {
   const value = cookieValue(request, "fd_s");
-  const match = /^(\d+)\.([a-f\d]{64})$/i.exec(value);
-  if (!match || !sessionSecretBytes(env.SESSION_SECRET)) return false;
-  const expires = Number(match[1]);
+  const match = /^(?:h([1-9]\d*)\.)?(\d+)\.([a-f\d]{64})$/i.exec(value);
+  if (!match || !sessionSecretBytes(env.SESSION_SECRET)) return null;
+  const hid = Number(match[1] || 1);
+  if (!Number.isSafeInteger(hid)) return null;
+  const expires = Number(match[2]);
   const now = Math.floor(Date.now() / 1e3);
-  if (!Number.isSafeInteger(expires) || expires <= now || expires > now + SESSION_SECONDS + 60) return false;
-  const expected = await sessionSignature(env.SESSION_SECRET, expires);
-  return !!expected && constantTimeEqual(expected, match[2]);
+  if (!Number.isSafeInteger(expires) || expires <= now || expires > now + SESSION_SECONDS + 60) return null;
+  const expected = await sessionSignature(env.SESSION_SECRET, match[1] ? `${hid}.${expires}` : expires);
+  return expected && constantTimeEqual(expected, match[3]) ? hid : null;
 }
 async function login(request, env) {
   if (!env.FAMILY_PIN || !sessionSecretBytes(env.SESSION_SECRET)) return json({ error: "Login is not configured" }, 503);
@@ -815,20 +952,21 @@ async function login(request, env) {
     return json({ error: "Invalid JSON" }, 400);
   }
   if (!body || typeof body.pin !== "string") return json({ error: "Invalid PIN" }, 400);
-  if (!constantTimeEqual(body.pin, env.FAMILY_PIN)) {
+  const hid = constantTimeEqual(body.pin, env.FAMILY_PIN) ? 1 : (await env.DB.prepare("SELECT id FROM household WHERE pin_hash = ?").bind(await sessionSignature(env.SESSION_SECRET, "pin:" + body.pin)).first())?.id;
+  if (!hid) {
     await env.DB.prepare("INSERT INTO login_fail (ip, ts) VALUES (?, ?)").bind(ip, now).run();
     const failures = Number(row?.count || 0) + 1;
     return json({ error: failures >= LOGIN_MAX_FAILURES ? "Too many attempts" : "Incorrect PIN" }, failures >= LOGIN_MAX_FAILURES ? 429 : 401);
   }
   await env.DB.prepare("DELETE FROM login_fail WHERE ip = ?").bind(ip).run();
   const expires = Math.floor(now / 1e3) + SESSION_SECONDS;
-  const signature = await sessionSignature(env.SESSION_SECRET, expires);
+  const signature = await sessionSignature(env.SESSION_SECRET, `${hid}.${expires}`);
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
     headers: {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "no-store",
-      "set-cookie": `fd_s=${expires}.${signature}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${SESSION_SECONDS}`
+      "set-cookie": `fd_s=h${hid}.${expires}.${signature}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${SESSION_SECONDS}`
     }
   });
 }
@@ -839,17 +977,19 @@ async function stateVersions(env) {
   const result = await env.DB.prepare("SELECT key, updated FROM state").all();
   const keys = {};
   (result.results || []).forEach((row) => {
-    keys[row.key] = row.updated;
+    const prefix = env.household.id === 1 ? "" : `h${env.household.id}:`;
+    const key = row.key.slice(prefix.length);
+    if (row.key.startsWith(prefix) && STATE_KEYS.has(key)) keys[key] = row.updated;
   });
   return json(keys);
 }
 async function musicAuth(env) {
-  let row = await env.DB.prepare("SELECT token, device_id, profile_json, email FROM music_auth WHERE id = 1").first();
+  let row = await env.DB.prepare("SELECT token, device_id, profile_json, email FROM household_music_auth WHERE hid = ?").bind(env.household.id).first();
   if (!row) {
-    await env.DB.prepare("INSERT INTO music_auth (id, token, device_id, profile_json, email, updated) VALUES (1, NULL, ?, NULL, NULL, ?) ON CONFLICT(id) DO NOTHING")
-      .bind(crypto.randomUUID(), Date.now())
+    await env.DB.prepare("INSERT INTO household_music_auth (hid, token, device_id, profile_json, email, updated) VALUES (?, NULL, ?, NULL, NULL, ?) ON CONFLICT(hid) DO NOTHING")
+      .bind(env.household.id, crypto.randomUUID(), Date.now())
       .run();
-    row = await env.DB.prepare("SELECT token, device_id, profile_json, email FROM music_auth WHERE id = 1").first();
+    row = await env.DB.prepare("SELECT token, device_id, profile_json, email FROM household_music_auth WHERE hid = ?").bind(env.household.id).first();
   }
   return row;
 }
@@ -982,7 +1122,7 @@ function musicForm(data = {}) {
   return values.toString();
 }
 async function clearMusicToken(env) {
-  await env.DB.prepare("UPDATE music_auth SET token = NULL, profile_json = NULL, updated = ? WHERE id = 1").bind(Date.now()).run();
+  await env.DB.prepare("UPDATE household_music_auth SET token = NULL, profile_json = NULL, updated = ? WHERE hid = ?").bind(Date.now(), env.household.id).run();
 }
 async function musicUpstream(env, auth, path, method = "GET", body = null, includeToken = true, options = {}) {
   let response;
@@ -1095,8 +1235,8 @@ async function musicRoute(request, env, url) {
     const token = musicToken(payload);
     if (!token) return json({ error: "24six login response did not contain a token" }, 502);
     const profile = musicProfile(payload);
-    await env.DB.prepare("UPDATE music_auth SET token = ?, profile_json = ?, email = ?, updated = ? WHERE id = 1")
-      .bind(token, profile ? JSON.stringify(profile) : null, body.email, Date.now())
+    await env.DB.prepare("UPDATE household_music_auth SET token = ?, profile_json = ?, email = ?, updated = ? WHERE hid = ?")
+      .bind(token, profile ? JSON.stringify(profile) : null, body.email, Date.now(), env.household.id)
       .run();
     return json({ ok: true, profile });
   }
@@ -1114,8 +1254,8 @@ async function musicRoute(request, env, url) {
     const token = musicToken(result.payload);
     if (!token) return json({ error: "24six profile response did not contain a token" }, 502);
     const profile = musicProfile(result.payload);
-    await env.DB.prepare("UPDATE music_auth SET token = ?, profile_json = COALESCE(?, profile_json), updated = ? WHERE id = 1")
-      .bind(token, profile ? JSON.stringify(profile) : null, Date.now())
+    await env.DB.prepare("UPDATE household_music_auth SET token = ?, profile_json = COALESCE(?, profile_json), updated = ? WHERE hid = ?")
+      .bind(token, profile ? JSON.stringify(profile) : null, Date.now(), env.household.id)
       .run();
     return json({ ok: true, profile });
   }
@@ -1246,12 +1386,13 @@ async function musicRoute(request, env, url) {
 }
 async function state(request, env, key) {
   if (!STATE_KEYS.has(key)) return json({ error: "Unknown state key" }, 404);
+  key = ns(env.household.id, key);
   if (request.method === "GET") {
     const row = await env.DB.prepare("SELECT json, updated FROM state WHERE key = ?").bind(key).first();
     return row ? json({ json: JSON.parse(row.json), updated: row.updated }) : json({ json: null, updated: 0 });
   }
   if (request.method !== "PUT") return json({ error: "Method not allowed" }, 405);
-  if (isKodeshWindowActive((await zmanimData()).windows)) {
+  if (isKodeshWindowActive((await zmanimData(fetch, env.household?.settings)).windows)) {
     return json({ error: "Editing is disabled during Shabbat/Yom Tov" }, 423);
   }
   const contentLength = Number(request.headers.get("content-length") || 0);
@@ -1280,21 +1421,36 @@ async function state(request, env, key) {
 }
 var index_default = {
   async scheduled(event, env) {
-    await Promise.all([
-      scanAlbum(env.DB, "main", env.PHOTOS_ALBUM_URL),
-      scanAlbum(env.DB, "shabbat", env.SHABBAT_ALBUM_URL)
-    ]);
+    const rows = await env.DB.prepare("SELECT id FROM household").all();
+    await Promise.all(rows.results.map(async (row) => {
+      const h = await loadHousehold(env, row.id);
+      await Promise.all(["main", "shabbat"].map((album) => {
+        const url = albumShareUrl({ ...env, household: h }, album);
+        return url ? scanAlbum(env.DB, ns(h.id, album), url, fetch, Date.now(), h.settings.location.tz) : null;
+      }));
+    }));
   },
   async fetch(request, env) {
     const url = new URL(request.url);
+    const hid = await sessionHousehold(request, env);
+    const household = hid ? await loadHousehold(env, hid) : null;
+    env = { ...env, household };
+    const html = async (path) => {
+      const response = await env.ASSETS.fetch(new Request(new URL(path, request.url), request));
+      const settings = household?.settings || householdSettings({}, {}, 0);
+      const fd = JSON.stringify({ tz: settings.location.tz, city: settings.location.name, admin: household?.id === 1, minyanimUrl: settings.minyanimUrl }).replaceAll("<", "\\u003c");
+      const result = new HTMLRewriter().on("head", { element(element) { element.append(`<script>window.FD=${fd}</script>`, { html: true }); } }).transform(response);
+      result.headers.set("cache-control", "private, no-store");
+      return result;
+    };
     if (url.pathname === "/" && env.ASSETS) {
-      return env.ASSETS.fetch(new Request(new URL("/index.html", request.url), request));
+      return html("/index.html");
     }
     if ((url.pathname === "/m" || url.pathname === "/m/") && env.ASSETS) {
-      return env.ASSETS.fetch(new Request(new URL("/m.html", request.url), request));
+      return html("/m.html");
     }
     if (url.pathname.startsWith("/api/music/")) {
-      if (!await hasSession(request, env)) return json({ error: "Authentication required" }, 403);
+      if (!household) return json({ error: "Authentication required" }, 403);
       try {
         return await musicRoute(request, env, url);
       } catch (_) {
@@ -1309,7 +1465,7 @@ var index_default = {
           return json({ error: "Login unavailable" }, 502);
         }
       }
-      if (!await hasSession(request, env)) return json({ error: "Authentication required" }, 401);
+      if (!household) return json({ error: "Authentication required" }, 401);
       if (url.pathname === "/api/logout" && request.method === "POST") {
         return new Response(JSON.stringify({ ok: true }), {
           status: 200,
@@ -1321,16 +1477,22 @@ var index_default = {
         });
       }
     }
+    if (household) {
+      try {
+        const response = await householdRoute(request, env, url);
+        if (response) return response;
+      } catch (_) { return json({ error: "Household request failed" }, 502); }
+    }
     if (url.pathname === "/api/weather" && request.method === "GET") {
       try {
-        return await weather(request);
+        return await weather(request, household.settings);
       } catch (_) {
         return json({ error: "Weather unavailable" }, 502);
       }
     }
     if (url.pathname === "/api/zmanim" && request.method === "GET") {
       try {
-        return await zmanim();
+        return await zmanim(household.settings);
       } catch (_) {
         return json({ error: "Zmanim unavailable" }, 502);
       }
