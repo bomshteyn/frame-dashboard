@@ -26,7 +26,9 @@ function householdSettings(value = {}, env = {}, hid = 1) {
     location: { geonameid: 6167865, name: "Toronto", lat: 43.70643, lon: -79.39864, tz: TORONTO, israel: false, ...value.location },
     photos: {
       main: value.photos?.main || (hid === 1 ? env.PHOTOS_ALBUM_URL || "" : ""),
-      shabbat: value.photos?.shabbat || (hid === 1 ? env.SHABBAT_ALBUM_URL || "" : "")
+      shabbat: value.photos?.shabbat || (hid === 1 ? env.SHABBAT_ALBUM_URL || "" : ""),
+      mode: value.photos?.mode ?? "mixed",
+      recentPercent: value.photos?.recentPercent ?? 100 / 3
     },
     calendars: value.calendars?.length ? value.calendars : hid === 1 ? JSON.parse(env.CALENDARS || "[]") : [],
     zmanim: { candles: 18, havdalah: [60, 72], shabbosEnds: 72, shema: "both", dafYomi: true, ...value.zmanim },
@@ -47,7 +49,9 @@ function validSettings(value) {
       !Number.isFinite(loc.lat) || Math.abs(loc.lat) > 90 || !Number.isFinite(loc.lon) || Math.abs(loc.lon) > 180 ||
       typeof loc.israel !== "boolean" || typeof loc.tz !== "string") return false;
   try { new Intl.DateTimeFormat("en", { timeZone: loc.tz }); } catch (_) { return false; }
-  return !!value.photos && https(value.photos.main) && https(value.photos.shabbat) && https(value.minyanimUrl) &&
+  return !!value.photos && https(value.photos.main) && https(value.photos.shabbat) &&
+    (value.photos.mode === undefined || ["mixed", "recent", "random", "onthisday"].includes(value.photos.mode)) &&
+    (value.photos.recentPercent === undefined || Number.isFinite(value.photos.recentPercent) && value.photos.recentPercent >= 0 && value.photos.recentPercent <= 100) && https(value.minyanimUrl) &&
     Array.isArray(value.calendars) && value.calendars.every((c) => c && typeof c.person === "string" && !!c.url && https(c.url)) &&
     !!z && Number.isInteger(z.candles) && z.candles >= 0 && z.candles <= 120 &&
     Array.isArray(z.havdalah) && z.havdalah.length > 0 && z.havdalah.length <= 5 && z.havdalah.every(opinion) &&
@@ -56,7 +60,7 @@ function validSettings(value) {
 }
 async function loadHousehold(env, id) {
   const row = await env.DB.prepare("SELECT id, name, settings FROM household WHERE id = ?").bind(id).first();
-  return row ? { ...row, settings: householdSettings(JSON.parse(row.settings), env, id) } : null;
+  return row ? { ...row, legacyPhotoMode: JSON.parse(row.settings).photos?.mode === undefined, settings: householdSettings(JSON.parse(row.settings), env, id) } : null;
 }
 async function householdRoute(request, env, url) {
   const h = env.household;
@@ -790,13 +794,13 @@ async function randomAlbumRows(db, album, gen) {
 }
 // Every batch: up to PHOTO_BATCH_NEW_MAX new photos (recently added to the album or recently taken),
 // filled up with random older photos, preferring ones not shown in the last day.
-async function mixedAlbumRows(db, album, gen, now, tz) {
+async function mixedAlbumRows(db, album, gen, now, tz, recentPercent = 100 / 3) {
   const isNew = "(COALESCE(s.added, 0) >= ? OR p.date >= ?)";
   const base = "SELECT p.id, p.src, p.date, p.o FROM album_photo p LEFT JOIN photo_seen s ON s.album = p.album AND s.id = p.id WHERE p.album = ? AND p.gen = ? AND " + NOT_HIDDEN + " AND ";
   const addedSince = now - PHOTO_NEW_ADDED_MS;
   const takenSince = torontoDateKey(now - PHOTO_NEW_TAKEN_MS, tz);
   const [fresh, older] = await db.batch([
-    db.prepare(base + isNew + " ORDER BY RANDOM() LIMIT ?").bind(album, gen, addedSince, takenSince, PHOTO_BATCH_NEW_MAX),
+    db.prepare(base + isNew + " ORDER BY RANDOM() LIMIT ?").bind(album, gen, addedSince, takenSince, Math.round(PHOTO_BATCH_SIZE * recentPercent / 100)),
     db.prepare(base + "NOT " + isNew + " ORDER BY COALESCE(s.served, 0) >= ?, RANDOM() LIMIT ?").bind(album, gen, addedSince, takenSince, now - PHOTO_RECENTLY_SHOWN_MS, PHOTO_BATCH_SIZE)
   ]);
   const newRows = fresh.results || [];
@@ -806,20 +810,60 @@ async function mixedAlbumRows(db, album, gen, now, tz) {
   }
   return { rows, fresh: newRows.length };
 }
-async function indexedAlbumPhotos(db, album, now = Date.now(), tz = TORONTO) {
+async function selectedAlbumRows(db, album, gen, now, tz, mode, recentPercent) {
+  const base = "SELECT p.id, p.src, p.date, p.o FROM album_photo p WHERE p.album = ? AND p.gen = ? AND " + NOT_HIDDEN;
+  if (mode === "recent") {
+    const added = await db.prepare(base + " AND p.id IN (SELECT id FROM photo_seen WHERE album = ? AND added >= ?) ORDER BY (SELECT added FROM photo_seen s WHERE s.album = p.album AND s.id = p.id) DESC, p.id LIMIT ?")
+      .bind(album, gen, album, now - PHOTO_NEW_ADDED_MS, PHOTO_BATCH_NEW_MAX).all().catch(() => ({ results: [] }));
+    const newest = await db.prepare(base + " ORDER BY p.date DESC, p.id LIMIT ?").bind(album, gen, PHOTO_BATCH_SIZE).all();
+    const rows = added.results || [], seen = new Set(rows.map((r) => r.id));
+    for (const row of newest.results || []) {
+      if (rows.length >= PHOTO_BATCH_SIZE) break;
+      if (!seen.has(row.id)) { rows.push(row); seen.add(row.id); }
+    }
+    rows.sort((a, b) => (b.date || "").localeCompare(a.date || "") || a.id.localeCompare(b.id));
+    return { rows };
+  }
+  if (mode === "random") return { rows: await randomAlbumRows(db, album, gen) };
+  const mixed = await mixedAlbumRows(db, album, gen, now, tz, recentPercent);
+  if (mode !== "onthisday") return mixed;
+  const today = torontoDateKey(now, tz);
+  const targets = [];
+  for (let offset = -2; offset <= 2; offset++) {
+    targets.push(addDate(today, -7 + offset));
+    const date = new Date(today + "T12:00:00Z");
+    const day = date.getUTCDate();
+    date.setUTCDate(1);
+    date.setUTCMonth(date.getUTCMonth() - 1);
+    const last = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+    date.setUTCDate(Math.min(day, last));
+    targets.push(addDate(date.toISOString().slice(0, 10), offset));
+  }
+  const matches = await db.prepare(base + " AND (p.date IN (SELECT value FROM json_each(?)) OR (substr(p.date, 6) = ? AND p.date < ?)) ORDER BY p.date DESC, p.id LIMIT ?")
+    .bind(album, gen, JSON.stringify(targets), today.slice(5), today, PHOTO_BATCH_SIZE).all();
+  const rows = matches.results || [], seen = new Set(rows.map((r) => r.id));
+  const remaining = await db.prepare(base + " ORDER BY RANDOM() LIMIT ?").bind(album, gen, PHOTO_BATCH_SIZE * 2).all();
+  for (const row of mixed.rows.concat(remaining.results || [])) {
+    if (rows.length >= PHOTO_BATCH_SIZE) break;
+    if (!seen.has(row.id)) { rows.push(row); seen.add(row.id); }
+  }
+  return { rows };
+}
+async function indexedAlbumPhotos(db, album, now = Date.now(), tz = TORONTO, options = {}) {
   if (!db) return null;
   const scan = await db.prepare("SELECT live_gen, count FROM album_scan WHERE album = ?").bind(album).first();
   if (!scan || scan.live_gen == null) return null;
   let rows, fresh;
-  if (album.replace(/^h\d+:/, "") === "main") {
+  const mode = options.mode || "mixed";
+  if (album.replace(/^h\d+:/, "") === "main" || mode !== "mixed" || options.mode && !options.legacyShabbat) {
     try {
-      ({ rows, fresh } = await mixedAlbumRows(db, album, scan.live_gen, now, tz));
+      ({ rows, fresh } = await selectedAlbumRows(db, album, scan.live_gen, now, tz, mode, options.recentPercent ?? 100 / 3));
     } catch (_) {
     }
   }
   if (!rows) rows = await randomAlbumRows(db, album, scan.live_gen);
   const photos2 = rows.map((row) => albumPhotoRow(row, album));
-  const body = { photos: photos2, total: Number.isFinite(scan.count) ? scan.count : photos2.length };
+  const body = { photos: photos2, total: Number.isFinite(scan.count) ? scan.count : photos2.length, mode };
   if (fresh != null) body.fresh = fresh;
   return body;
 }
@@ -828,7 +872,7 @@ async function photos(request, env) {
   const album = url.searchParams.get("album");
   if (album !== "main" && album !== "shabbat") return json({ error: "Unknown album" }, 400);
   try {
-    const indexed = await indexedAlbumPhotos(env.DB, ns(env.household.id, album), Date.now(), env.household.settings.location.tz);
+    const indexed = await indexedAlbumPhotos(env.DB, ns(env.household.id, album), Date.now(), env.household.settings.location.tz, { ...env.household.settings.photos, legacyShabbat: env.household.id === 1 && env.household.legacyPhotoMode });
     if (indexed) return json(indexed);
   } catch (_) {
   }

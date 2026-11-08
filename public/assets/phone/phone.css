@@ -36,6 +36,13 @@ body {
 .m-city-results { margin-top: 12px; }
 .m-chores { margin-top: 28px; }
 .m-weekday-chip { border: 1px solid var(--line); border-radius: 20px; padding: 5px 9px; }
+.m-household-settings .m-photo-modes { margin-top: 24px; }
+.m-photo-modes legend { font-weight: 700; margin-bottom: 12px; }
+.m-photo-mode { display: flex; align-items: flex-start; gap: 10px; padding: 12px 0; cursor: pointer; }
+.m-photo-mode input { margin-top: 4px; accent-color: var(--ink); }
+.m-photo-mode strong, .m-photo-mode small { display: block; }
+.m-photo-mode small { color: var(--mute); font-size: 14px; line-height: 1.45; margin-top: 4px; }
+.m-photo-share[hidden] { display: none; }
 body {
   padding: 0;
   font-size: 16px;

@@ -97,6 +97,10 @@ test("settings validate full replacements and reload only their own frames", asy
   const { api, owner, friend } = await pair();
   const settings = await (await api("/api/settings", friend)).json();
   for (const change of [
+    { photos: { ...settings.photos, mode: "invalid" } },
+    { photos: { ...settings.photos, recentPercent: -1 } },
+    { photos: { ...settings.photos, recentPercent: 101 } },
+    { photos: { ...settings.photos, recentPercent: "50" } },
     { location: { ...settings.location, tz: "Invalid/Zone" } },
     { photos: { main: "http://example.com", shabbat: "" } },
     { zmanim: { ...settings.zmanim, shabbosEnds: 30 } },
@@ -251,6 +255,8 @@ test("album scanning uses exact namespaced keys, never another household's scan"
   assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM album_scan WHERE album = 'h2:main'").get().n, 1);
   const settings = await (await api("/api/settings", owner)).json();
   assert.equal(settings.minyanimUrl, "https://torontominyanim.com/");
+  assert.equal(settings.photos.mode, "mixed");
+  assert.equal(settings.photos.recentPercent, 100 / 3);
 });
 
 function chore(id, options = {}) {

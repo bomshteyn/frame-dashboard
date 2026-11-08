@@ -19,6 +19,22 @@ test("weather day click handler is bound once per view", () => {
   assert.match(asset("main-"), /e\._wxDays\|\|\(e\._wxDays=!0,e\.addEventListener\(`click`/);
 });
 
+test("photo slideshow preserves server ordering for recent and memories, retaining legacy mixed favorites", () => {
+  const main = asset("main-");
+  const source = main.slice(main.indexOf("s.refill=") + 9, main.indexOf(",s.take=", main.indexOf("s.refill=")));
+  const photos = [{ src: "first", fav: true }, { src: "second" }];
+  for (const mode of ["recent", "onthisday", "random", "mixed"]) {
+    const refill = new Function("window", "r", "n", "App", "return (" + source + ")")(
+      { DATA: { photoMode: mode } }, () => photos, (rows) => rows.reverse(), { photoMeta: () => ({}) });
+    const slideshow = {};
+    refill.call(slideshow);
+    assert.equal(slideshow.queue.length, mode === "mixed" ? 3 : 2);
+    if (mode === "recent" || mode === "onthisday") assert.deepEqual(slideshow.queue, photos);
+    if (mode === "random") assert.deepEqual(slideshow.queue, photos.slice().reverse());
+  }
+  assert.ok(main.includes('n.photoMode===`recent`||n.photoMode===`onthisday`?0:n.photos.length-1'));
+});
+
 test("new household bootstrap excludes demo groceries while owner defaults remain unchanged", () => {
   const shared = asset("auto-update-");
   const source = shared.slice(shared.indexOf("window.CONFIG="), shared.indexOf("function f(e){return e&&typeof"));
@@ -84,8 +100,8 @@ test("Shabbat havdalah rendering preserves legacy rows and supports custom opini
 
 test("phone page loads its readable source assets", () => {
   const html = readFileSync("public/m.html", "utf8");
-  assert.match(html, /src="\/assets\/phone\/app\.js\?v=4"/);
-  assert.match(html, /href="\/assets\/phone\/phone\.css\?v=3"/);
+  assert.match(html, /src="\/assets\/phone\/app\.js\?v=5"/);
+  assert.match(html, /href="\/assets\/phone\/phone\.css\?v=4"/);
   assert.doesNotMatch(html, /mobile-[\w-]+\.(?:js|css)/);
 });
 

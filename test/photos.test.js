@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
-import worker from "../worker/index.js";
+import worker, { indexedAlbumPhotos } from "../worker/index.js";
 
 function d1() {
   const sqlite = new DatabaseSync(":memory:");
@@ -119,3 +119,60 @@ test("hide and unhide through the API", async () => {
   }
 });
 
+test("mixed mode defaults remain 100 of 300 recent and the share is adjustable", async () => {
+  const db = d1();
+  seed(db, { old: 600, recentTaken: 400 });
+  assert.equal((await indexedAlbumPhotos(db, "main", NOW, "America/Toronto", { mode: "mixed" })).fresh, 100);
+  for (const [percent, fresh] of [[0, 0], [25, 75], [50, 150], [100, 300]]) {
+    const result = await indexedAlbumPhotos(db, "main", NOW, "America/Toronto", { mode: "mixed", recentPercent: percent });
+    assert.equal(result.photos.length, 300);
+    assert.equal(result.fresh, fresh);
+  }
+});
+
+test("recent mode orders by date taken and includes newly added older pictures", async () => {
+  const db = d1();
+  seed(db, { old: 400, recentTaken: 400, recentAdded: 20 });
+  const result = await indexedAlbumPhotos(db, "main", NOW, "America/Toronto", { mode: "recent" });
+  assert.equal(result.photos.length, 300);
+  assert.equal(result.photos.filter((p) => p.src.includes("/added")).length, 20);
+  const dates = result.photos.map((p) => p.date);
+  assert.deepEqual(dates, dates.slice().sort().reverse());
+  db.sqlite.exec("DROP TABLE photo_seen");
+  assert.equal((await indexedAlbumPhotos(db, "main", NOW, "America/Toronto", { mode: "recent" })).photos.length, 300);
+});
+
+test("random mode has no recent cap and excludes hidden and other-household rows", async () => {
+  const db = d1();
+  seed(db, { recentTaken: 500 });
+  db.sqlite.prepare("INSERT INTO photo_hidden (album,id,src,hidden) VALUES ('main','taken0','hidden',1)").run();
+  db.sqlite.prepare("INSERT INTO album_photo (album,gen,id,src) VALUES ('h2:main',1,'friend','friend-photo')").run();
+  const result = await indexedAlbumPhotos(db, "main", NOW, "America/Toronto", { mode: "random" });
+  assert.equal(result.photos.length, 300);
+  assert.equal(new Set(result.photos.map((p) => p.src)).size, 300);
+  assert.ok(result.photos.every((p) => p.src !== "friend-photo" && !p.src.endsWith("/taken0")));
+});
+
+test("memories prioritize week, month and yearly anniversaries then fill a unique mixed batch", async () => {
+  const db = d1();
+  seed(db, { old: 500, recentTaken: 200 });
+  for (const [id, date] of [["week","2026-10-11"],["month","2026-09-18"],["year","2025-10-18"],["two-years","2024-10-18"],["hidden","2023-10-18"]]) {
+    db.sqlite.prepare("INSERT INTO album_photo (album,gen,id,src,date,o) VALUES ('main',1,?,?,?,'l')").run(id, "https://p/" + id, date);
+  }
+  db.sqlite.prepare("INSERT INTO photo_hidden (album,id,src,hidden) VALUES ('main','hidden','hidden',1)").run();
+  const result = await indexedAlbumPhotos(db, "main", NOW, "America/Toronto", { mode: "onthisday" });
+  assert.equal(result.photos.length, 300);
+  assert.deepEqual(result.photos.slice(0,4).map((p) => p.src), ["https://p/week","https://p/month","https://p/year","https://p/two-years"]);
+  assert.equal(new Set(result.photos.map((p) => p.src)).size, 300);
+  assert.ok(!result.photos.some((p) => p.src.endsWith("/hidden")));
+});
+
+test("all photo modes handle empty albums and memories fill albums with no anniversary matches", async () => {
+  const db = d1();
+  seed(db, {});
+  for (const mode of ["mixed","recent","random","onthisday"]) assert.equal((await indexedAlbumPhotos(db, "main", NOW, "America/Toronto", { mode })).photos.length, 0);
+  db.sqlite.exec("DELETE FROM album_scan");
+  seed(db, { recentTaken: 400 });
+  const result = await indexedAlbumPhotos(db, "main", NOW, "America/Toronto", { mode: "onthisday" });
+  assert.equal(result.photos.length, 300);
+});

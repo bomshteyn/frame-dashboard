@@ -140,7 +140,8 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
     var form = appRoot.querySelector("#householdSettings");
     if (!form || !householdSettings) return;
     var data = new FormData(form);
-    householdSettings.photos = { main: data.get("photoMain").trim(), shabbat: data.get("photoShabbat").trim() };
+    householdSettings.photos = { main: data.get("photoMain").trim(), shabbat: data.get("photoShabbat").trim(),
+      mode: data.get("photoMode"), recentPercent: Number(data.get("photoRecentPercent")) };
     householdSettings.calendars = Array.from(form.querySelectorAll("[data-calendar-row]")).map(function (row) {
       return { person: row.querySelector('[name="calendarPerson"]').value.trim(), url: row.querySelector('[name="calendarUrl"]').value.trim() };
     });
@@ -163,7 +164,11 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
       '<div class="m-city-results" aria-live="polite">' + cityResults.map(function (c, i) { return '<button type="button" class="m-setting-row" data-city-pick="' + i + '"><span><strong>' + escapeHTML(c.name) + '</strong><small>' + escapeHTML(c.tz) + '</small></span>' + phoneIcon("chevron", 16) + '</button>'; }).join("") + '</div></section>' +
       '<section class="m-household-card"><h2 class="serif">Photos</h2><p class="m-muted">In the Google Photos app, create an album (or open one), tap Share → “Create link” / “Copy link”, then paste it here. It looks like https://photos.app.goo.gl/…</p><p class="m-muted">Use a shared link: anyone with the link can view. Add photos to that album from any family phone. New photos appear on the frame within about 12 hours. To stop a photo showing, use Hide on the frame.</p>' +
       settingsInput("Main album link", "photoMain", s.photos.main, "url") + settingsInput("Shabbat album link (optional)", "photoShabbat", s.photos.shabbat, "url") +
-      '<p class="m-muted">The optional Shabbat album contains photos shown during Shabbos. Leave it empty to use your main album.</p></section>' +
+      '<p class="m-muted">The optional Shabbat album contains photos shown during Shabbos. Leave it empty to use your main album.</p>' +
+      '<fieldset class="m-photo-modes"><legend>Which photos should the frame show?</legend>' +
+      [["mixed","Mixed","Mix recent photos with older surprises."],["recent","Most recent","Show the newest photos by date taken, including newly added pictures."],["random","Random","Choose a random selection from the whole album."],["onthisday","Memories","Start with photos from around a week or month ago, and this date in past years; fill the rest with a mix."]].map(function (m) {
+        return '<label class="m-photo-mode"><input type="radio" name="photoMode" value="' + m[0] + '"' + (s.photos.mode === m[0] ? " checked" : "") + '><span><strong>' + m[1] + '</strong><small>' + m[2] + '</small></span></label>';
+      }).join("") + '</fieldset><label class="m-household-label m-photo-share"' + (s.photos.mode === "mixed" ? "" : " hidden") + '>Recent photos: <output>' + Math.round(s.photos.recentPercent * 10) / 10 + '%</output><input name="photoRecentPercent" type="range" min="0" max="100" step="any" value="' + s.photos.recentPercent + '"><span class="m-muted">The rest are older photos. Default: about one third recent.</span></label></section>' +
       '<section class="m-household-card"><h2 class="serif">Calendars</h2><p class="m-muted">In Google Calendar on a computer: Settings → your calendar → Integrate calendar → copy the “Secret address in iCal format”. Keep this link private.</p>' +
       s.calendars.map(function (c, i) { return '<div class="m-calendar-edit" data-calendar-row>' + settingsInput("Person name", "calendarPerson", c.person) + settingsInput("ICS link", "calendarUrl", c.url, "url") + '<button type="button" class="m-btn m-btn--quiet" data-calendar-remove="' + i + '">Remove calendar</button></div>'; }).join("") +
       '<button type="button" class="m-btn" data-household-action="add-calendar">Add calendar</button></section>' +
@@ -2303,6 +2308,11 @@ import { readStateVersions, subscribeStateVersions } from "../state-poll.js";
       if (event.target.closest("#householdSettings")) {
         if (event.target.name === "cityQuery") cityQuery = event.target.value;
         readSettingsForm();
+        if (event.target.name === "photoMode" || event.target.name === "photoRecentPercent") {
+          var share = appRoot.querySelector(".m-photo-share");
+          share.hidden = householdSettings.photos.mode !== "mixed";
+          share.querySelector("output").textContent = Math.round(householdSettings.photos.recentPercent * 10) / 10 + "%";
+        }
       }
       if (event.target.name === `item`) {
         viewState.query = event.target.value;
